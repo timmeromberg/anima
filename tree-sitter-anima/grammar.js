@@ -30,6 +30,7 @@ module.exports = grammar({
     /\s+/,
     $.line_comment,
     $.block_comment,
+    ';',
   ],
 
   supertypes: $ => [
@@ -46,6 +47,8 @@ module.exports = grammar({
     [$.qualified_identifier, $._expression],
     // (Type) -> is function_type or parenthesized_type before when arrow
     [$.function_type, $.parenthesized_type],
+    // if expression with bare expressions in branches
+    [$._expression, $.if_expression],
   ],
 
   rules: {
@@ -75,6 +78,9 @@ module.exports = grammar({
       $.context_declaration,
       $.resource_declaration,
       $.protocol_declaration,
+      $.diagnosable_declaration,
+      $.val_declaration,
+      $.var_declaration,
     ),
 
     // ======================== Imports & Modules =====================
@@ -138,10 +144,10 @@ module.exports = grammar({
       'intent',
       'fun',
       optional($.type_parameters),
+      optional(seq(field('receiver', $._type), '.')),
       field('name', $.identifier),
       field('parameters', $.parameter_list),
-      ':',
-      field('return_type', $._type),
+      optional(seq(':', field('return_type', $._type))),
       optional(field('context_clause', $.context_clause)),
       field('body', $.intent_body),
     ),
@@ -161,6 +167,7 @@ module.exports = grammar({
       $.cost_clause,
       $.fallback_clause,
       $.adapt_clause,
+      $.given_block,
       $._statement,
     ),
 
@@ -180,7 +187,7 @@ module.exports = grammar({
 
     assume_clause: $ => seq('assume', $.block),
 
-    hint_clause: $ => seq('hint', '(', $.string_literal, ')'),
+    hint_clause: $ => seq('hint', '(', $.string_template, ')'),
 
     cost_clause: $ => seq(
       'cost',
@@ -215,8 +222,7 @@ module.exports = grammar({
       optional($.type_parameters),
       field('name', $.identifier),
       field('parameters', $.parameter_list),
-      ':',
-      field('return_type', $._type),
+      optional(seq(':', field('return_type', $._type))),
       optional(field('context_clause', $.context_clause)),
       '{',
       repeat($._intent_clause),
@@ -272,7 +278,7 @@ module.exports = grammar({
 
     evolution_rule: $ => seq(
       $.identifier,
-      optional(seq('(', optional(commaSep1($._expression)), ')')),
+      optional(seq('(', optional(commaSep1($._argument)), ')')),
     ),
 
     trigger_clause: $ => seq('triggerWhen', $.block),
@@ -299,8 +305,7 @@ module.exports = grammar({
       optional(seq(field('receiver', $._type), '.')),
       field('name', $.identifier),
       field('parameters', $.parameter_list),
-      ':',
-      'Boolean',
+      optional(seq(':', 'Boolean')),
       field('body', $.fuzzy_body),
     ),
 
@@ -336,7 +341,11 @@ module.exports = grammar({
     agent_declaration: $ => seq(
       'agent',
       field('name', $.identifier),
-      optional(field('parameters', $.parameter_list)),
+      optional(seq(
+        '(',
+        optional(commaSep1(choice($.field_parameter, $.parameter))),
+        ')',
+      )),
       optional(seq(':', commaSep1($._type))),
       field('body', $.agent_body),
     ),
@@ -352,6 +361,7 @@ module.exports = grammar({
       $.tools_section,
       $.boundaries_section,
       $.team_section,
+      $.evolving_declaration,
       $.intent_declaration,
       $.function_declaration,
       $.on_handler,
@@ -375,8 +385,7 @@ module.exports = grammar({
       'fun',
       field('name', $.identifier),
       field('parameters', $.parameter_list),
-      ':',
-      field('return_type', $._type),
+      optional(seq(':', field('return_type', $._type))),
     ),
 
     boundaries_section: $ => seq(
@@ -439,13 +448,14 @@ module.exports = grammar({
       field('name', $.identifier),
       optional($.type_parameters),
       '(',
-      commaSep1($.field_parameter),
+      optional(commaSep1($.field_parameter)),
       ')',
       optional(seq(':', commaSep1($._type))),
       optional(field('body', $.entity_body)),
     ),
 
     field_parameter: $ => seq(
+      repeat($.modifier),
       choice('val', 'var'),
       field('name', $.identifier),
       ':',
@@ -486,17 +496,13 @@ module.exports = grammar({
       '(',
       optional(commaSep1($.field_parameter)),
       ')',
-      ':',
-      field('supertype', $._type),
-      '()',
+      optional(seq(':', field('supertype', $._type), '(', ')')),
     ),
 
     sealed_object: $ => seq(
       'object',
       field('name', $.identifier),
-      ':',
-      field('supertype', $._type),
-      '()',
+      optional(seq(':', field('supertype', $._type), '(', ')')),
     ),
 
     // ======================== Interfaces ============================
@@ -542,6 +548,54 @@ module.exports = grammar({
       field('type', $._type),
     ),
 
+    // ======================== Diagnosable Classes ===================
+
+    diagnosable_declaration: $ => seq(
+      'diagnosable',
+      'class',
+      field('name', $.identifier),
+      '(',
+      optional(commaSep1($.field_parameter)),
+      ')',
+      optional(seq(':', field('supertype', $._type), '(', ')')),
+      '{',
+      optional($.diagnose_block),
+      optional($.suggest_block),
+      optional($.auto_fix_block),
+      '}',
+    ),
+
+    diagnose_block: $ => seq(
+      'diagnose',
+      '{',
+      repeat($.diagnose_check),
+      '}',
+    ),
+
+    diagnose_check: $ => seq(
+      'check',
+      $.block,
+      optional(seq('yields', $.string_template)),
+    ),
+
+    suggest_block: $ => seq(
+      'suggest',
+      '{',
+      repeat($.string_template),
+      '}',
+    ),
+
+    auto_fix_block: $ => seq(
+      'autoFix',
+      optional(seq('(', commaSep1($._argument), ')')),
+      '{',
+      repeat(choice($.attempt_clause, $.verify_clause)),
+      '}',
+    ),
+
+    attempt_clause: $ => seq('attempt', $.block),
+    verify_clause: $ => seq('verify', $.block),
+
     // ======================== Features & Specs ======================
 
     feature_declaration: $ => seq(
@@ -560,9 +614,11 @@ module.exports = grammar({
       field('name', $.string_literal),
       ')',
       '{',
-      $.given_block,
-      $.whenever_block,
-      $.then_block,
+      repeat(choice(
+        $.given_block,
+        $.whenever_block,
+        $.then_block,
+      )),
       '}',
     ),
 
@@ -601,7 +657,10 @@ module.exports = grammar({
       field('name', $.identifier),
       ':',
       field('type', $._type),
-      optional(seq('=', field('value', $._expression))),
+      optional(choice(
+        seq('=', field('value', $._expression)),
+        seq('by', field('delegate', $._expression)),
+      )),
     ),
 
     auto_learn_block: $ => seq(
@@ -652,7 +711,7 @@ module.exports = grammar({
 
     _policy_rule: $ => choice(
       seq($.identifier, '=', $._expression),
-      seq('onConflict', $.lambda_expression),
+      seq('onConflict', choice($.lambda_expression, $.block)),
     ),
 
     // ======================== Protocols =============================
@@ -731,7 +790,7 @@ module.exports = grammar({
 
     generic_type: $ => seq(
       choice('Fuzzy', 'Intent', 'Stream', 'List', 'MutableList',
-             'Set', 'Map', 'MutableMap'),
+             'Set', 'Map', 'MutableMap', 'Result'),
       '<',
       commaSep1($._type),
       '>',
@@ -773,6 +832,7 @@ module.exports = grammar({
     confidence_expression: $ => choice(
       $.float_literal,
       'Confidence',
+      '_',
       seq('(', '>', $.float_literal, ')'),
       seq('(', '<', $.float_literal, ')'),
       seq('(', $.float_literal, '..', $.float_literal, ')'),
@@ -793,9 +853,11 @@ module.exports = grammar({
       $.safe_member_expression,
       $.non_null_expression,
       $.call_expression,
+      $.index_expression,
       $.confidence_expression_val,
       $.binary_expression,
       $.unary_expression,
+      $.postfix_update_expression,
       $.type_check_expression,
       $.type_cast_expression,
       $.safe_cast_expression,
@@ -812,6 +874,8 @@ module.exports = grammar({
       $.ask_expression,
       $.diagnose_expression,
       $.emit_expression,
+      $.try_expression,
+      $.spawn_expression,
     ),
 
     this_expression: _ => 'this',
@@ -838,10 +902,15 @@ module.exports = grammar({
 
     call_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._expression),
-      '(',
-      optional(commaSep1($._argument)),
-      ')',
-      optional(field('trailing_lambda', $.lambda_expression)),
+      choice(
+        seq(
+          '(',
+          optional(commaSep1($._argument)),
+          ')',
+          optional(field('trailing_lambda', $.lambda_expression)),
+        ),
+        field('trailing_lambda', $.lambda_expression),
+      ),
     )),
 
     _argument: $ => choice(
@@ -850,10 +919,17 @@ module.exports = grammar({
     ),
 
     named_argument: $ => seq(
-      field('name', $.identifier),
+      field('name', choice($.identifier, 'from')),
       '=',
       field('value', $._expression),
     ),
+
+    index_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('object', $._expression),
+      '[',
+      field('index', $._expression),
+      ']',
+    )),
 
     confidence_expression_val: $ => prec.left(PREC.CONFIDENCE, seq(
       field('value', $._expression),
@@ -866,6 +942,7 @@ module.exports = grammar({
         ['*', PREC.MULTIPLICATIVE],
         ['/', PREC.MULTIPLICATIVE],
         ['%', PREC.MULTIPLICATIVE],
+        ['per', PREC.MULTIPLICATIVE],
         ['+', PREC.ADDITIVE],
         ['-', PREC.ADDITIVE],
         ['<', PREC.COMPARISON],
@@ -874,8 +951,10 @@ module.exports = grammar({
         ['>=', PREC.COMPARISON],
         ['==', PREC.EQUALITY],
         ['!=', PREC.EQUALITY],
+        ['matches', PREC.EQUALITY],
         ['&&', PREC.AND],
         ['||', PREC.OR],
+        ['to', PREC.RANGE],
       ].map(([op, prec_level]) =>
         prec.left(prec_level, seq(
           field('left', $._expression),
@@ -888,6 +967,11 @@ module.exports = grammar({
     unary_expression: $ => prec.right(PREC.UNARY, seq(
       field('operator', choice('-', '!')),
       field('operand', $._expression),
+    )),
+
+    postfix_update_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('operand', $._expression),
+      field('operator', choice('++', '--')),
     )),
 
     type_check_expression: $ => prec.left(PREC.TYPE_OP, seq(
@@ -964,10 +1048,10 @@ module.exports = grammar({
       '(',
       field('condition', $._expression),
       ')',
-      field('consequence', $.block),
+      field('consequence', choice($.block, $._expression)),
       optional(seq(
         'else',
-        field('alternative', choice($.if_expression, $.block)),
+        field('alternative', choice($.if_expression, $.block, $._expression)),
       )),
     )),
 
@@ -1009,7 +1093,7 @@ module.exports = grammar({
       '(',
       field('target', $._expression),
       ')',
-      field('body', $.lambda_expression),
+      field('body', choice($.lambda_expression, $.block)),
     ),
 
     parallel_expression: $ => seq(
@@ -1017,10 +1101,36 @@ module.exports = grammar({
       field('body', $.lambda_expression),
     ),
 
+    spawn_expression: $ => seq(
+      'spawn',
+      '<',
+      field('type', $._type),
+      '>',
+      '(',
+      optional(commaSep1($._argument)),
+      ')',
+    ),
+
     recall_expression: $ => seq('recall', '(', $._expression, ')'),
     ask_expression: $ => seq('ask', '(', $._expression, ')'),
     diagnose_expression: $ => seq('diagnose', '(', $._expression, ')'),
     emit_expression: $ => seq('emit', '(', $._expression, ')'),
+
+    try_expression: $ => seq(
+      'try',
+      field('body', $.block),
+      repeat1($.catch_clause),
+    ),
+
+    catch_clause: $ => seq(
+      'catch',
+      '(',
+      field('name', $.identifier),
+      ':',
+      field('type', $._type),
+      ')',
+      field('body', $.block),
+    ),
 
     // ================================================================
     // Statements
@@ -1150,13 +1260,13 @@ module.exports = grammar({
     // Comments
     // ================================================================
 
-    line_comment: _ => token(prec(-1, seq('//', /.*/))),
+    line_comment: _ => token(seq('//', /.*/)),
 
-    block_comment: _ => token(prec(-1, seq(
+    block_comment: _ => token(seq(
       '/*',
       /[^*]*\*+([^/*][^*]*\*+)*/,
       '/',
-    ))),
+    )),
   },
 });
 

@@ -90,6 +90,19 @@
   "deployment"
   "accessPolicy"
   "onConflict"
+  "diagnosable"
+  "check"
+  "yields"
+  "suggest"
+  "autoFix"
+  "attempt"
+  "verify"
+  "try"
+  "catch"
+  "to"
+  "matches"
+  "per"
+  "by"
 ] @keyword
 
 ; Modifiers
@@ -108,7 +121,7 @@
 (nl_type "NL" @type.builtin)
 
 (generic_type
-  ["Fuzzy" "Intent" "Stream" "List" "MutableList" "Set" "Map" "MutableMap"] @type.builtin)
+  ["Fuzzy" "Intent" "Stream" "List" "MutableList" "Set" "Map" "MutableMap" "Result"] @type.builtin)
 
 "Confidence" @type.builtin
 "Boolean" @type.builtin
@@ -163,7 +176,10 @@
 (abstract_field
   name: (identifier) @variable.field)
 
-; ======================== Entities & Agents ========================
+; ======================== Entities, Agents & Diagnosable ========================
+
+(diagnosable_declaration
+  name: (identifier) @type.definition)
 
 (entity_declaration
   name: (identifier) @type.definition)
@@ -248,6 +264,8 @@
   "?:"
   "?."
   "!!"
+  "++"
+  "--"
 ] @operator
 
 "->" @punctuation.special
@@ -283,6 +301,19 @@
 (fallback_clause "fallback" @keyword.control)
 (adapt_clause "adapt" @keyword.control)
 (cost_clause "cost" @keyword.control)
+(given_block "given" @keyword.control)
+
+(catch_clause
+  name: (identifier) @variable.parameter)
+
+(diagnose_check "check" @keyword.control)
+(diagnose_check "yields" @keyword.control)
+(attempt_clause "attempt" @keyword.control)
+(verify_clause "verify" @keyword.control)
+
+(index_expression
+  "[" @punctuation.bracket
+  "]" @punctuation.bracket)
 
 (fitness_metric
   name: (identifier) @variable
