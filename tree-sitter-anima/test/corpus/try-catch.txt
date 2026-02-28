@@ -1,0 +1,28 @@
+================================================================================
+Basic try/catch
+================================================================================
+
+fun test() { try { riskyCall() } catch (e: Error) { handleError(e) } }
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list)
+    body: (block
+      (expression_statement
+        (try_expression
+          body: (block
+            (expression_statement
+              (call_expression
+                function: (identifier))))
+          (catch_clause
+            name: (identifier)
+            type: (type_identifier
+              (identifier))
+            body: (block
+              (expression_statement
+                (call_expression
+                  function: (identifier)
+                  (identifier))))))))))
