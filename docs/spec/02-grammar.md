@@ -36,11 +36,16 @@ declaration    ::= import_decl
                  | type_alias
                  | fun_decl
                  | intent_decl
+                 | evolving_decl
+                 | fuzzy_decl
                  | agent_decl
                  | feature_decl
                  | context_decl
                  | resource_decl
                  | protocol_decl
+                 | diagnosable_decl
+                 | val_decl
+                 | var_decl
 ```
 
 ### Imports
@@ -108,7 +113,8 @@ fun <T : Rankable> topK(items: List<T>, k: Int): List<T> =
 
 ```ebnf
 intent_decl    ::= modifiers 'intent' 'fun' type_params?
-                   IDENT '(' param_list ')' ':' type_expr
+                   (receiver_type '.')? IDENT
+                   '(' param_list ')' (':' type_expr)?
                    context_clause?
                    intent_body
 
@@ -122,7 +128,8 @@ intent_clause  ::= ensure_clause
                  | cost_clause
                  | fallback_clause
                  | adapt_clause
-                 | statement            -- imperative code
+                 | given_block           -- context setup
+                 | statement             -- imperative code
 
 ensure_clause  ::= 'ensure' block
 prefer_clause  ::= 'prefer' block ('weight' FLOAT)?
@@ -213,8 +220,8 @@ fuzzy fun NL.isReadable(): Boolean {
 
 ```ebnf
 agent_decl     ::= 'agent' IDENT
-                   ('(' param_list ')')?
-                   (': ' type_expr (',' type_expr)*)?   -- implements
+                   ('(' (field_param | param)* ')')?    -- supports modifiers
+                   (': ' type_expr (',' type_expr)*)?    -- implements
                    agent_body
 
 agent_body     ::= '{' agent_section* '}'
@@ -223,6 +230,7 @@ agent_section  ::= context_section
                  | tools_section
                  | boundaries_section
                  | team_section
+                 | evolving_decl
                  | intent_decl
                  | fun_decl
                  | on_handler
@@ -257,14 +265,17 @@ type_expr      ::= primitive_type
                  | 'List' '<' type_expr '>'              -- list
                  | 'Set' '<' type_expr '>'               -- set
                  | 'Map' '<' type_expr ',' type_expr '>' -- map
+                 | 'Result' '<' type_expr '>'            -- result type
                  | '[' type_expr (',' type_expr)* ']'    -- tuple
                  | '(' param_types ')' '->' type_expr    -- function type
 
-primitive_type ::= 'Int' | 'Float' | 'String' | 'Bool'
+primitive_type ::= 'Int' | 'Float' | 'String' | 'Bool' | 'Boolean'
                  | 'Byte' | 'Unit' | 'Any' | 'Nothing'
+                 | 'ID' | 'DateTime'
 
 confidence_expr::= FLOAT                    -- literal
                  | 'Confidence'              -- runtime-determined
+                 | '_'                       -- wildcard (any confidence)
                  | '(' '>' FLOAT ')'         -- at least
                  | '(' '<' FLOAT ')'         -- at most
                  | '(' FLOAT '..' FLOAT ')'  -- range
@@ -282,7 +293,7 @@ entity_decl    ::= 'data' 'entity' IDENT type_params?
                    (': ' type_expr (',' type_expr)*)?
                    entity_body?
 
-field_param    ::= ('val' | 'var') IDENT ':' type_expr ('=' expr)?
+field_param    ::= modifiers ('val' | 'var') IDENT ':' type_expr ('=' expr)?
 
 entity_body    ::= '{' (invariant_clause | fun_decl)* '}'
 invariant_clause ::= 'invariant' block
@@ -295,8 +306,8 @@ sealed_decl    ::= 'sealed' 'class' IDENT type_params?
                    (': ' type_expr)?
                    '{' sealed_member* '}'
 
-sealed_member  ::= 'data' 'class' IDENT '(' field_param* ')' ':' type_expr '()'
-                 | 'object' IDENT ':' type_expr '()'
+sealed_member  ::= 'data' 'class' IDENT '(' field_param* ')' (':' type_expr '(' ')')?
+                 | 'object' IDENT (':' type_expr '(' ')')?
 ```
 
 ### Interfaces
@@ -315,6 +326,54 @@ interface_member ::= field_decl | fun_signature
 type_alias     ::= 'type' IDENT type_params? '=' type_expr
 ```
 
+### Diagnosable Classes
+
+Self-diagnosing error types that can inspect their own state, suggest fixes, and attempt automatic recovery.
+
+```ebnf
+diagnosable_decl ::= 'diagnosable' 'class' IDENT
+                     '(' field_param* ')'
+                     (':' type_expr '(' ')')?         -- supertype
+                     '{' diagnose_block? suggest_block? auto_fix_block? '}'
+
+diagnose_block   ::= 'diagnose' '{' diagnose_check* '}'
+diagnose_check   ::= 'check' block ('yields' STRING)?
+
+suggest_block    ::= 'suggest' '{' STRING* '}'
+
+auto_fix_block   ::= 'autoFix' ('(' arg_list ')')? '{' (attempt | verify)* '}'
+attempt          ::= 'attempt' block
+verify           ::= 'verify' block
+```
+
+#### Examples
+
+```anima
+diagnosable class SensorFailure(
+    val sensorId: ID,
+    val lastReading: DateTime
+) : DeviceError() {
+
+    diagnose {
+        check { sensorBatteryLevel(sensorId) }
+            yields "Battery: ${batteryLevel(sensorId)}%"
+        check { sensorConnectionStatus(sensorId) }
+            yields "Connection: ${connectionStatus(sensorId)}"
+    }
+
+    suggest {
+        "Replace battery if below 10%"
+        "Recalibrate sensor: run calibrate --sensor $sensorId"
+    }
+
+    autoFix(requiresApproval = false) {
+        attempt { reconnectSensor(sensorId) }
+        attempt { recalibrate(sensorId) }
+        verify { sensorResponds(sensorId) }
+    }
+}
+```
+
 ### Expressions
 
 ```ebnf
@@ -323,40 +382,46 @@ expr           ::= literal
                  | expr '.' IDENT                    -- member access
                  | expr '?.' IDENT                   -- safe call
                  | expr '!!'                         -- non-null assert
-                 | expr '(' arg_list ')'             -- function call
-                 | expr type_args '(' arg_list ')'   -- generic call
+                 | expr '(' arg_list ')' lambda?     -- function call
+                 | expr lambda                       -- trailing lambda (no parens)
+                 | expr '[' expr ']'                 -- index access
                  | expr '@' confidence_expr          -- confidence annotate
                  | expr '?:' expr                    -- elvis operator
-                 | 'delegate' '(' expr ')' lambda    -- agent delegation
-                 | 'parallel' lambda                 -- parallel execution
-                 | 'recall' '(' expr ')'             -- memory retrieval
-                 | 'ask' '(' expr ')'                -- human escalation
-                 | 'diagnose' '(' expr ')'           -- error diagnosis
-                 | 'emit' '(' expr ')'               -- event emission
-                 | expr 'is' type_expr               -- type check
-                 | expr 'as' type_expr               -- type cast
-                 | expr 'as?' type_expr              -- safe cast
+                 | expr '++'                         -- postfix increment
+                 | expr '--'                         -- postfix decrement
+                 | 'delegate' '(' expr ')' (lambda | block)
+                 | 'parallel' lambda
+                 | 'spawn' '<' type_expr '>' '(' arg_list ')'
+                 | 'recall' '(' expr ')'
+                 | 'ask' '(' expr ')'
+                 | 'diagnose' '(' expr ')'
+                 | 'emit' '(' expr ')'
+                 | 'try' block catch_clause+         -- exception handling
+                 | expr 'is' type_expr ('@' confidence_expr)?
+                 | expr 'as' type_expr
+                 | expr 'as?' type_expr
                  | expr '~=' expr                    -- semantic equality
                  | expr '~>' expr                    -- semantic implication
                  | expr '<~' expr                    -- semantic containment
-                 | expr 'in' expr                    -- containment check
-                 | expr '..' expr                    -- range
+                 | expr 'in' expr
+                 | expr '..' expr
                  | when_expr
                  | if_expr
                  | lambda
-                 | comprehension
                  | string_template
                  | binary_expr
                  | unary_expr
 
+catch_clause   ::= 'catch' '(' IDENT ':' type_expr ')' block
+
 when_expr      ::= 'when' ('(' expr ')')? '{' when_branch* '}'
-when_branch    ::= when_condition '->' expr
-                 | 'else' '->' expr
-when_condition ::= 'is' type_expr
-                 | 'is' type_expr '@' confidence_expr  -- confidence match
+when_branch    ::= when_condition '->' (expr | block)
+                 | 'else' '->' (expr | block)
+when_condition ::= 'is' type_expr ('@' confidence_expr)?
                  | expr
 
-if_expr        ::= 'if' '(' expr ')' block ('else' (if_expr | block))?
+if_expr        ::= 'if' '(' expr ')' (block | expr)
+                   ('else' (if_expr | block | expr))?
 
 lambda         ::= '{' (param_list '->')? statement* '}'
 
@@ -405,6 +470,8 @@ deployment_block ::= 'deployment' '{' deploy_field* '}'
 context_decl   ::= 'context' IDENT '{' context_tier* auto_learn? decay_block? '}'
 
 context_tier   ::= ('persistent' | 'session' | 'ephemeral') '{' field_decl* '}'
+
+field_decl     ::= 'val' IDENT ':' type_expr ('=' expr | 'by' expr)?
 
 auto_learn     ::= 'autoLearn' '{' learn_rule* '}'
 learn_rule     ::= 'rule' '(' STRING ')' '{' whenever_clause store_clause '}'
@@ -473,25 +540,56 @@ message_decl   ::= 'message' IDENT '(' field_param* ')'
 | `strategy` | Initial implementation |
 | `entity` | Domain entity (like data class + invariants) |
 | `invariant` | Entity invariant |
+| `cost` | Cost annotation for constraints |
+| `given` | Precondition block |
 | `context` | Memory context block |
 | `recall` | Semantic memory retrieval |
 | `ask` | Human escalation |
-| `diagnose` | Error diagnosis |
-| `diagnosable` | Self-diagnosing error |
+| `diagnose` | Error diagnosis block |
+| `diagnosable` | Self-diagnosing error class |
+| `check` | Diagnostic check |
+| `yields` | Diagnostic check result |
+| `suggest` | Suggestion block |
+| `autoFix` | Auto-fix block |
+| `attempt` | Auto-fix attempt |
+| `verify` | Auto-fix verification |
 | `emit` | Event emission |
 | `adapt` | Error adaptation |
 | `fallback` | Fallback strategy |
+| `try` | Exception handling |
+| `catch` | Exception handler |
 | `NL` | Natural language type |
 | `Fuzzy` | Probabilistic type |
 | `Confidence` | Confidence type variable |
 | `factors` | Fuzzy predicate factors |
 | `weight` | Constraint/factor weight |
+| `metric` | Fitness metric |
+| `fitness` | Fitness block |
 | `protocol` | Agent message protocol |
+| `message` | Protocol message declaration |
 | `shared` | Shared resource modifier |
+| `resource` | Resource declaration |
 | `spawn` | Agent instantiation |
 | `parallel` | Parallel execution block |
 | `feature` | Feature/spec declaration |
 | `spec` | Specification |
+| `to` | Pair construction (infix) |
+| `matches` | Pattern matching (infix) |
+| `per` | Rate expression (infix) |
+| `by` | Delegation |
+| `on` | Event handler |
+| `team` | Agent team section |
+| `tools` | Agent tools section |
+| `boundaries` | Agent boundaries section |
+| `needs` | Agent capability requirement |
+| `reads` | Agent read capability |
+| `can` / `cannot` | Agent permission |
+| `store` | Memory storage rule |
+| `decay` | Memory decay block |
+| `autoLearn` | Automatic learning block |
+| `rule` | Learning rule |
+| `deployment` | Deployment configuration |
+| `accessPolicy` | Resource access policy |
 
 ### Operators
 
@@ -504,5 +602,6 @@ message_decl   ::= 'message' IDENT '(' field_param* ')'
 | `?.` | Safe call (null) |
 | `!!` | Non-null assertion |
 | `?:` | Elvis operator |
+| `++` / `--` | Postfix increment / decrement |
 | `..` | Range |
 | `->` | Lambda / when branch |
