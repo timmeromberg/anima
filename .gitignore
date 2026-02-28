@@ -29,3 +29,11 @@ package-lock.json
 
 # Generated
 *.generated.*
+
+# Tree-sitter generated files
+tree-sitter-anima/src/
+tree-sitter-anima/bindings/
+tree-sitter-anima/build/
+tree-sitter-anima/binding.gyp
+tree-sitter-anima/Makefile
+tree-sitter-anima/*.wasm
