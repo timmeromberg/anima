@@ -1,0 +1,463 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Anima",
+  "scopeName": "source.anima",
+  "fileTypes": ["anima"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#constants" },
+    { "include": "#keywords" },
+    { "include": "#modifiers" },
+    { "include": "#types" },
+    { "include": "#function-definition" },
+    { "include": "#entity-definition" },
+    { "include": "#agent-definition" },
+    { "include": "#class-definition" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.anima",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.anima",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            { "include": "#comments" }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.anima",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.anima",
+              "match": "\\\\[\\\\'\"nbrt$]"
+            },
+            {
+              "name": "meta.template.expression.anima",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.definition.template-expression.begin.anima" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.definition.template-expression.end.anima" }
+              },
+              "patterns": [
+                { "include": "source.anima" }
+              ]
+            },
+            {
+              "name": "variable.other.template.anima",
+              "match": "\\$([a-zA-Z_][a-zA-Z0-9_]*)"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.anima",
+          "match": "\\b[0-9][0-9]*\\.[0-9][0-9_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.anima",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.anima",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.anima",
+          "match": "\\b(null)\\b"
+        },
+        {
+          "name": "variable.language.this.anima",
+          "match": "\\b(this|self)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "comment": "Control flow keywords",
+          "name": "keyword.control.anima",
+          "match": "\\b(if|else|when|for|while|return|try|catch|in|is)\\b"
+        },
+        {
+          "comment": "Declaration keywords",
+          "name": "keyword.other.declaration.anima",
+          "match": "\\b(fun|val|var|import|from|module|data|sealed|class|interface|type|object)\\b"
+        },
+        {
+          "comment": "Type operators",
+          "name": "keyword.operator.type.anima",
+          "match": "\\b(as\\?|as)\\b"
+        },
+        {
+          "comment": "Anima intent and constraint keywords",
+          "name": "keyword.control.intent.anima",
+          "match": "\\b(intent|ensure|prefer|avoid|assume|hint|cost|fallback|adapt)\\b"
+        },
+        {
+          "comment": "Anima evolution keywords",
+          "name": "keyword.control.evolution.anima",
+          "match": "\\b(evolving|evolve|strategy|fitness|allow|forbid|triggerWhen|rollbackWhen|review|autoApproveIf|humanApproveIf|autoLearn|rule|store|decay)\\b"
+        },
+        {
+          "comment": "Anima fuzzy and semantic keywords",
+          "name": "keyword.control.semantic.anima",
+          "match": "\\b(fuzzy|factors|metric|weight|matches|per)\\b"
+        },
+        {
+          "comment": "Anima agent and concurrency keywords",
+          "name": "keyword.control.agent.anima",
+          "match": "\\b(agent|entity|context|recall|ask|diagnose|emit|delegate|parallel|spawn|tools|boundaries|team|on|can|cannot|requiresApproval)\\b"
+        },
+        {
+          "comment": "Anima feature and spec keywords",
+          "name": "keyword.control.spec.anima",
+          "match": "\\b(feature|spec|given|whenever|then|deployment)\\b"
+        },
+        {
+          "comment": "Anima resource and protocol keywords",
+          "name": "keyword.control.resource.anima",
+          "match": "\\b(shared|resource|protocol|message|accessPolicy|onConflict)\\b"
+        },
+        {
+          "comment": "Anima diagnosable keywords",
+          "name": "keyword.control.diagnosable.anima",
+          "match": "\\b(diagnosable|check|yields|suggest|autoFix|attempt|verify)\\b"
+        },
+        {
+          "comment": "Anima other keywords",
+          "name": "keyword.other.anima",
+          "match": "\\b(invariant|needs|reads|to|by)\\b"
+        },
+        {
+          "comment": "Context tier keywords",
+          "name": "keyword.other.tier.anima",
+          "match": "\\b(persistent|session|ephemeral)\\b"
+        }
+      ]
+    },
+    "modifiers": {
+      "patterns": [
+        {
+          "name": "storage.modifier.anima",
+          "match": "\\b(public|private|internal|protected|suspend|inline|override|abstract)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "comment": "Primitive types",
+          "name": "storage.type.primitive.anima",
+          "match": "\\b(Int|Float|String|Bool|Boolean|Byte|Unit|Any|Nothing|ID|DateTime)\\b"
+        },
+        {
+          "comment": "Special types including NL",
+          "name": "support.type.anima",
+          "match": "\\b(NL|Fuzzy|Intent|Stream|List|MutableList|Set|Map|MutableMap|Result|Confidence)\\b"
+        },
+        {
+          "comment": "Type starting with uppercase (heuristic for user-defined types)",
+          "name": "entity.name.type.anima",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "function-definition": {
+      "patterns": [
+        {
+          "comment": "Function declaration: fun name",
+          "match": "\\b(fun)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "entity.name.function.anima" }
+          }
+        },
+        {
+          "comment": "Extension function: fun Type.name",
+          "match": "\\b(fun)\\s+(?:<[^>]+>\\s+)?([A-Z][a-zA-Z0-9_]*)\\s*\\.\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "entity.name.type.anima" },
+            "3": { "name": "entity.name.function.anima" }
+          }
+        },
+        {
+          "comment": "Intent function declaration: intent fun name",
+          "match": "\\b(intent)\\s+(fun)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)",
+          "captures": {
+            "1": { "name": "keyword.control.intent.anima" },
+            "2": { "name": "keyword.other.declaration.anima" },
+            "3": { "name": "entity.name.function.anima" }
+          }
+        },
+        {
+          "comment": "Fuzzy function declaration: fuzzy fun name",
+          "match": "\\b(fuzzy)\\s+(fun)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)",
+          "captures": {
+            "1": { "name": "keyword.control.semantic.anima" },
+            "2": { "name": "keyword.other.declaration.anima" },
+            "3": { "name": "entity.name.function.anima" }
+          }
+        },
+        {
+          "comment": "Evolving intent function: evolving intent fun name",
+          "match": "\\b(evolving)\\s+(intent)\\s+(fun)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)",
+          "captures": {
+            "1": { "name": "keyword.control.evolution.anima" },
+            "2": { "name": "keyword.control.intent.anima" },
+            "3": { "name": "keyword.other.declaration.anima" },
+            "4": { "name": "entity.name.function.anima" }
+          }
+        }
+      ]
+    },
+    "entity-definition": {
+      "patterns": [
+        {
+          "comment": "Entity declaration: data entity Name",
+          "match": "\\b(data)\\s+(entity)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "keyword.control.agent.anima" },
+            "3": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Diagnosable declaration: diagnosable class Name",
+          "match": "\\b(diagnosable)\\s+(class)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.diagnosable.anima" },
+            "2": { "name": "keyword.other.declaration.anima" },
+            "3": { "name": "entity.name.type.anima" }
+          }
+        }
+      ]
+    },
+    "agent-definition": {
+      "patterns": [
+        {
+          "comment": "Agent declaration: agent Name",
+          "match": "\\b(agent)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.agent.anima" },
+            "2": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Protocol declaration: protocol Name",
+          "match": "\\b(protocol)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.resource.anima" },
+            "2": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Context declaration: context Name",
+          "match": "\\b(context)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.agent.anima" },
+            "2": { "name": "entity.name.type.anima" }
+          }
+        }
+      ]
+    },
+    "class-definition": {
+      "patterns": [
+        {
+          "comment": "Sealed class: sealed class Name",
+          "match": "\\b(sealed)\\s+(class)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "keyword.other.declaration.anima" },
+            "3": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Data class: data class Name",
+          "match": "\\b(data)\\s+(class)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "keyword.other.declaration.anima" },
+            "3": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Interface: interface Name",
+          "match": "\\b(interface)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Type alias: type Name",
+          "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Object: object Name",
+          "match": "\\b(object)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.declaration.anima" },
+            "2": { "name": "entity.name.type.anima" }
+          }
+        },
+        {
+          "comment": "Shared resource: shared resource Name",
+          "match": "\\b(shared)\\s+(resource)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.resource.anima" },
+            "2": { "name": "keyword.control.resource.anima" },
+            "3": { "name": "entity.name.type.anima" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Semantic operators",
+          "name": "keyword.operator.semantic.anima",
+          "match": "~=|~>|<~"
+        },
+        {
+          "comment": "Arrow operator",
+          "name": "keyword.operator.arrow.anima",
+          "match": "->"
+        },
+        {
+          "comment": "Safe navigation",
+          "name": "keyword.operator.safe-navigation.anima",
+          "match": "\\?\\."
+        },
+        {
+          "comment": "Non-null assertion",
+          "name": "keyword.operator.non-null.anima",
+          "match": "!!"
+        },
+        {
+          "comment": "Elvis operator",
+          "name": "keyword.operator.elvis.anima",
+          "match": "\\?:"
+        },
+        {
+          "comment": "Increment/decrement",
+          "name": "keyword.operator.increment.anima",
+          "match": "\\+\\+|--"
+        },
+        {
+          "comment": "Range operator",
+          "name": "keyword.operator.range.anima",
+          "match": "\\.\\."
+        },
+        {
+          "comment": "Comparison operators",
+          "name": "keyword.operator.comparison.anima",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "comment": "Logical operators",
+          "name": "keyword.operator.logical.anima",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "comment": "Confidence annotation operator",
+          "name": "keyword.operator.confidence.anima",
+          "match": "@"
+        },
+        {
+          "comment": "Arithmetic operators",
+          "name": "keyword.operator.arithmetic.anima",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "comment": "Comparison (single char)",
+          "name": "keyword.operator.comparison.anima",
+          "match": "[<>]"
+        },
+        {
+          "comment": "Assignment",
+          "name": "keyword.operator.assignment.anima",
+          "match": "="
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.bracket.round.anima",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.bracket.square.anima",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.bracket.curly.anima",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.separator.comma.anima",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.dot.anima",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.separator.colon.anima",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.terminator.semicolon.anima",
+          "match": ";"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "comment": "Function call heuristic: identifier followed by (",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.anima" }
+          }
+        },
+        {
+          "comment": "Generic identifier",
+          "name": "variable.other.anima",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,28 @@
+<idea-plugin>
+    <id>com.anima.intellij</id>
+    <name>Anima Language</name>
+    <version>0.1.0</version>
+    <vendor>Anima</vendor>
+
+    <description><![CDATA[
+        Syntax highlighting for the Anima programming language (.anima files).
+        Anima is an AI-first programming language with intent functions, fuzzy predicates,
+        confidence types, agents, and evolution blocks.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.textmate</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+            name="Anima"
+            implementationClass="com.anima.intellij.AnimaFileType"
+            fieldName="INSTANCE"
+            language="Anima"
+            extensions="anima"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="org.jetbrains.plugins.textmate">
+        <bundleProvider implementation="com.anima.intellij.AnimaTextMateBundleProvider"/>
+    </extensions>
+</idea-plugin>

@@ -1,0 +1,23 @@
+{
+  "name": "anima",
+  "displayName": "Anima Language",
+  "description": "Syntax highlighting for the Anima programming language",
+  "version": "0.1.0",
+  "contributes": {
+    "grammars": [
+      {
+        "language": "anima",
+        "scopeName": "source.anima",
+        "path": "./anima.tmLanguage.json"
+      }
+    ],
+    "languages": [
+      {
+        "id": "anima",
+        "aliases": ["Anima"],
+        "extensions": [".anima"],
+        "configuration": {}
+      }
+    ]
+  }
+}
