@@ -493,6 +493,7 @@ module.exports = grammar({
       'data',
       'class',
       field('name', $.identifier),
+      optional($.type_parameters),
       '(',
       optional(commaSep1($.field_parameter)),
       ')',
@@ -1062,7 +1063,12 @@ module.exports = grammar({
       '}',
     ),
 
-    lambda_parameters: $ => commaSep1($.identifier),
+    lambda_parameters: $ => commaSep1($.lambda_parameter),
+
+    lambda_parameter: $ => seq(
+      $.identifier,
+      optional(seq(':', $._type)),
+    ),
 
     string_template: $ => seq(
       '"',

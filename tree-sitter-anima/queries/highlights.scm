@@ -161,6 +161,9 @@
 (parameter
   name: (identifier) @variable.parameter)
 
+(lambda_parameter
+  (identifier) @variable.parameter)
+
 (val_declaration
   pattern: (identifier) @variable)
 
