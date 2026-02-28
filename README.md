@@ -70,6 +70,9 @@ The full language specification lives in [`docs/spec/`](docs/spec/):
 | [07 — Evolution Engine](docs/spec/07-evolution-engine.md) | Self-modifying code, governance, fitness |
 | [08 — Error Model](docs/spec/08-error-model.md) | Diagnosable errors, self-healing |
 | [09 — Runtime Architecture](docs/spec/09-runtime-architecture.md) | Compiler pipeline, runtime components |
+| [10 — Type System Formal](docs/spec/10-type-system-formal.md) | Subtyping rules, confidence algebra, type inference |
+| [11 — Execution Model](docs/spec/11-execution-model.md) | Intent resolution, agent lifecycle, concurrency |
+| [12 — Confidence Propagation](docs/spec/12-confidence-propagation.md) | Propagation rules, narrowing, implementation |
 
 ## Examples
 
