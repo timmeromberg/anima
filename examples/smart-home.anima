@@ -1,0 +1,185 @@
+// smart-home.anima
+// A smart home controller demonstrating confidence types, sensor fusion,
+// diagnosable errors, and agent delegation.
+
+module SmartHome
+
+import { Temperature, Humidity, LightLevel } from "anima/sensors"
+import { Device, Command } from "anima/iot"
+
+
+// ======================== Domain Entities ========================
+
+data entity Room(
+    val id: ID,
+    val name: String,
+    val devices: List<Device>,
+    val targetTemp: Float = 22.0,
+    val occupied: Boolean = false
+)
+
+data entity ClimateReading(
+    val temperature: Float @ Confidence,
+    val humidity: Float @ Confidence,
+    val co2: Float @ Confidence,
+    val timestamp: DateTime = now()
+)
+
+
+// ======================== Diagnosable Errors =====================
+
+diagnosable class SensorFailure(
+    val sensorId: ID,
+    val lastReading: DateTime
+) : DeviceError() {
+
+    diagnose {
+        check { sensorBatteryLevel(sensorId) }
+            yields "Battery: ${batteryLevel(sensorId)}%"
+
+        check { sensorConnectionStatus(sensorId) }
+            yields "Connection: ${connectionStatus(sensorId)}"
+
+        check { lastCalibration(sensorId) }
+            yields "Last calibrated: ${calibrationDate(sensorId)}"
+
+        check { firmwareVersion(sensorId) }
+            yields "Firmware: ${firmware(sensorId)}, latest: ${latestFirmware()}"
+    }
+
+    suggest {
+        "Replace battery if below 10%"
+        "Recalibrate sensor: run calibrate --sensor $sensorId"
+        "Check WiFi signal strength near sensor"
+    }
+
+    autoFix(requiresApproval = false) {
+        attempt { reconnectSensor(sensorId) }
+        attempt { recalibrate(sensorId) }
+        verify { sensorResponds(sensorId) }
+    }
+}
+
+
+// ======================== Climate Agent =========================
+
+agent ClimateController(
+    private val comfortModel: ComfortModel = ComfortModel.default()
+) {
+    context {
+        val readingHistory: MutableMap<ID, List<ClimateReading>> = mutableMapOf()
+        var energyUsedToday: Float = 0.0
+    }
+
+    tools {
+        fun readSensor(sensorId: ID): ClimateReading
+        fun setThermostat(roomId: ID, temp: Float): Result<Unit>
+        fun setFanSpeed(roomId: ID, speed: Int): Result<Unit>
+        fun getWeatherForecast(): WeatherForecast @ Confidence
+    }
+
+    boundaries {
+        maxCost = 0.10.dollars per hour
+        maxTime = 10.seconds per decision
+
+        can { readSensors; controlHvac; readWeather }
+        cannot { unlockDoors; disableAlarms; accessCameras }
+    }
+
+    // Fuse multiple sensor readings into one confident value
+    fun fuseReadings(room: Room): ClimateReading {
+        val sensors = room.devices.filter { it.type == SensorType.CLIMATE }
+        val readings = sensors.map { sensor ->
+            try {
+                readSensor(sensor.id)
+            } catch (e: SensorFailure) {
+                val diagnosis = e.diagnose()
+                log("Sensor ${sensor.id} failed: ${diagnosis.summary}")
+                diagnosis.autoFix()
+                null
+            }
+        }.filterNotNull()
+
+        // Fuse readings — confidence propagates automatically
+        val avgTemp = readings.map { it.temperature }.average()
+        val avgHumidity = readings.map { it.humidity }.average()
+        val avgCo2 = readings.map { it.co2 }.average()
+
+        return ClimateReading(
+            temperature = avgTemp,
+            humidity = avgHumidity,
+            co2 = avgCo2
+        )
+    }
+
+    intent fun optimizeComfort(room: Room): List<Command> {
+        given { val reading = fuseReadings(room) }
+        given { val forecast = getWeatherForecast() }
+
+        ensure { room.temperature in (room.targetTemp - 2.0)..(room.targetTemp + 2.0) }
+        ensure { room.humidity in 30.0..60.0 }
+
+        prefer { energyCost.isMinimized() }
+        prefer { reading.co2 < 800.0 }
+        prefer { transitionIsSmoothFor(room.occupants) }
+
+        avoid { rapidTemperatureChanges(room) }
+        avoid { conflictingWithNeighborRooms(room) }
+
+        // Use forecast to pre-heat/pre-cool
+        if (forecast @ (>0.8)) {
+            hint("weather forecast is reliable, consider preemptive adjustments")
+        }
+
+        cost {
+            maxEnergy = 2.kwh per hour
+        }
+
+        adapt<AllSensorsDown> {
+            // Fall back to schedule-based control
+            log("All sensors down, using schedule fallback")
+            val schedule = recall("room ${room.id} typical schedule")
+            useSchedule(schedule)
+        }
+    }
+
+    on<OccupancyChanged> { event ->
+        val room = getRoomById(event.roomId)
+        if (event.occupied && !room.occupied) {
+            // Room just became occupied — optimize immediately
+            val commands = optimizeComfort(room.copy(occupied = true))
+            commands.forEach { execute(it) }
+        }
+    }
+}
+
+
+// ======================== Home Orchestrator =====================
+
+agent HomeOrchestrator {
+    team {
+        val climate = spawn<ClimateController>()
+        val lighting = spawn<LightingController>()
+        val security = spawn<SecurityController>()
+    }
+
+    intent fun handleRoutine(routine: NL): List<Command> {
+        ensure { output.all { it.isSafe() } }
+        prefer { output.isEnergyEfficient() }
+        avoid  { output.any { it.conflicts(other = output) } }
+
+        // "good morning" routine, "bedtime" routine, etc.
+        // The intent resolver interprets the NL and generates
+        // appropriate commands across all subsystems
+        hint("coordinate climate, lighting, and security together")
+
+        val climateCommands = delegate(team.climate) {
+            optimizeForRoutine(routine)
+        }
+        val lightingCommands = delegate(team.lighting) {
+            setSceneForRoutine(routine)
+        }
+
+        return climateCommands + lightingCommands
+    }
+}

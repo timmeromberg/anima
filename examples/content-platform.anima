@@ -1,0 +1,374 @@
+// content-platform.anima
+// A complete content platform demonstrating agents, intents, evolution,
+// and the full Anima feature set.
+
+module ContentPlatform
+
+import { HttpServer, Router, Request, Response } from "anima/http"
+import { Database, Query } from "anima/db"
+import { NL, Fuzzy } from "anima/core"
+import { similarity, embed } from "anima/ml"
+
+
+// ======================== Domain Entities ========================
+
+data entity User(
+    val id: ID,
+    val email: String,
+    val name: String,
+    val preferences: Map<String, Any> = emptyMap(),
+    val createdAt: DateTime = now()
+) {
+    invariant { email matches EMAIL_REGEX }
+    invariant { name.length in 1..200 }
+}
+
+data entity Post(
+    val id: ID,
+    val author: User,
+    val title: String,
+    val body: NL,
+    val tags: List<String> = emptyList(),
+    val publishedAt: DateTime? = null,
+    val qualityScore: Float @ Confidence
+) {
+    invariant { title.length in 1..200 }
+}
+
+sealed class ModerationDecision {
+    data class Approve(val postId: ID, val reason: NL) : ModerationDecision()
+    data class Flag(val postId: ID, val reason: NL, val severity: Float) : ModerationDecision()
+    data class Hide(val postId: ID, val reason: NL) : ModerationDecision()
+}
+
+
+// ======================== Fuzzy Predicates =======================
+
+fuzzy fun Post.isClickbait(): Boolean {
+    factors {
+        title.hasExcessivePunctuation()           weight 0.3
+        title.hasAllCaps()                         weight 0.2
+        title.semanticGap(body) > 0.5              weight 0.3
+        historicalClickToReadRatio(this) > 5.0     weight 0.2
+    }
+}
+
+fuzzy fun NL.isReadable(): Boolean {
+    factors {
+        avgSentenceLength < 25          weight 0.3
+        fleschKincaidGrade < 10         weight 0.3
+        hasStructure()                  weight 0.2
+        usesPlainLanguage()             weight 0.2
+    }
+}
+
+fuzzy fun List<Post>.hasFilterBubble(user: User): Boolean {
+    factors {
+        topicDiversity() < 2                       weight 0.4
+        noveltyScore(user) < 0.1                   weight 0.3
+        all { it.aligns(user.preferences) }        weight 0.3
+    }
+}
+
+
+// ======================== Shared Resources ======================
+
+shared resource ContentDatabase(
+    val capacity: Int = 100,
+    val conflictStrategy: ConflictStrategy = SemanticMerge
+) {
+    accessPolicy {
+        priority = byUrgencyScore()
+        fairness = noStarvationBeyond(5.seconds)
+        onConflict { mine, theirs ->
+            when {
+                canMerge(mine, theirs) -> merge(mine, theirs)
+                else -> ask("Conflicting changes: ${diff(mine, theirs)}")
+            }
+        }
+    }
+}
+
+
+// ======================== Context ===============================
+
+context PlatformMemory {
+    persistent {
+        val contentGuidelines: NL by stored()
+        val moderationPatterns: List<Pattern> by stored()
+        var popularTopics: List<String> by stored()
+    }
+
+    session {
+        val activeUsers: MutableMap<ID, User> = mutableMapOf()
+        var requestCount: Int = 0
+    }
+
+    autoLearn {
+        rule("moderation pattern") {
+            whenever { moderationDecision.patternCount >= 5 }
+            store {
+                Pattern(
+                    trigger = moderationDecision.contentSignature,
+                    action = moderationDecision.mostCommonAction(),
+                    confidence = moderationDecision.consistencyRate
+                )
+            }
+        }
+    }
+
+    decay {
+        rate = 0.01 per day
+        floor = 0.3
+        refreshOn = Access
+    }
+}
+
+
+// ======================== Moderator Agent ========================
+
+agent Moderator(
+    private val guidelines: NL = recall("content guidelines")
+) {
+    context {
+        val history: MutableList<ModerationDecision> = mutableListOf()
+        var accuracy: Float = 0.0
+        var totalProcessed: Int = 0
+    }
+
+    tools {
+        fun classifyContent(text: NL): ContentClassification
+        fun checkFactuality(claim: NL): FactCheck @ Confidence
+        fun detectToxicity(text: NL): ToxicityScore
+    }
+
+    boundaries {
+        maxCost = 0.01.dollars per invocation
+        maxTime = 5.seconds
+        maxToolCalls = 20
+
+        can { readPosts; flagPosts; hidePosts }
+        cannot { deletePosts; banUsers; accessDMs }
+        requiresApproval { hidePosts where { post.author.isVerified } }
+    }
+
+    intent fun moderate(post: Post): ModerationDecision {
+        ensure { result is ModerationDecision }
+        ensure { result.hasReason() }
+        prefer { result.isConsistentWith(context.history) }
+        avoid  { censoringLegitimateDiscourse(post) }
+
+        val factCheck = checkFactuality(post.body)
+        if (factCheck.isFalse @ (>0.9)) {
+            hint("strongly consider flagging as misinformation")
+        }
+
+        val toxicity = detectToxicity(post.body)
+        if (toxicity.score > 0.8) {
+            hint("high toxicity detected, consider hiding")
+        }
+
+        adapt<AmbiguousContent> {
+            ask("Is this post acceptable? ${post.body.summarize()}")
+        }
+    }
+
+    fun getAccuracyReport(): Report = Report(
+        totalDecisions = context.history.size,
+        accuracy = context.accuracy,
+        recentTrend = context.history.takeLast(100).accuracyTrend()
+    )
+
+    on<FeedbackReceived> { event ->
+        context.history.find { it.postId == event.postId }?.let {
+            it.wasCorrect = event.userAgreed
+            context.accuracy = context.history.accuracyRate()
+        }
+        context.totalProcessed++
+    }
+}
+
+
+// ======================== Recommender Agent ======================
+
+agent Recommender(
+    private val embeddingModel: EmbeddingModel = EmbeddingModel.default()
+) {
+    context {
+        val userModels: MutableMap<ID, UserModel> = mutableMapOf()
+    }
+
+    tools {
+        fun embed(content: Any): Vector
+        fun similarity(a: Vector, b: Vector): Float
+    }
+
+    boundaries {
+        maxTime = 200.milliseconds
+        maxCost = 0.005.dollars per request
+    }
+
+    evolving intent fun recommend(user: User, count: Int = 10): List<Post> {
+        ensure { output.size <= count }
+        ensure { output.all { it.qualityScore @ (>0.6) } }
+        prefer { user.engagementWith(output).isMaximized() }
+        prefer { output.topicDiversity() >= 3 }
+        avoid  { output.hasFilterBubble(user) }
+        avoid  { output.any { it.isClickbait() } }
+
+        strategy {
+            val profile = context.userModels[user.id]
+                ?: return Post.query {
+                    where { published == true }
+                    orderBy { qualityScore.desc }
+                    limit(count)
+                }
+
+            val candidates = Post.query {
+                where { published == true }
+                orderBy { qualityScore.desc }
+                limit(100)
+            }
+
+            candidates
+                .map { post ->
+                    val relevance = similarity(embed(profile), embed(post))
+                    val noveltyBonus = if (post.isNovelFor(user)) 0.2 else 0.0
+                    Scored(post, relevance + noveltyBonus)
+                }
+                .sortedByDescending { it.score }
+                .take(count)
+                .map { it.item }
+        }
+
+        evolve {
+            fitness {
+                readCompletionRate  weight 0.4
+                shareRate           weight 0.3
+                returnRate24h       weight 0.3
+            }
+
+            allow {
+                modifyRankingLogic()
+                addSignals(from = listOf(user.history, user.demographics))
+                changeResultCount(range = 5..20)
+            }
+
+            forbid {
+                reduceDiversityBelow(3)
+                increaseLatencyBeyond(200.milliseconds)
+                accessData(user.privateMessages)
+                useDarkPatterns()
+            }
+
+            triggerWhen { fitness.score < 0.4 lasting 7.days }
+            rollbackWhen { fitness.score < previousVersion.score * 0.9 }
+
+            review {
+                autoApproveIf { changeScope == ChangeScope.MINOR }
+                humanApproveIf { changeScope == ChangeScope.MAJOR }
+            }
+        }
+    }
+}
+
+
+// ======================== Orchestrator Agent =====================
+
+agent PlatformOrchestrator {
+    team {
+        val moderator = spawn<Moderator>()
+        val recommender = spawn<Recommender>()
+    }
+
+    intent fun publishPost(author: User, postData: PostInput): Result<Post> {
+        // Create the post
+        val post = Post(
+            id = generateId(),
+            author = author,
+            title = postData.title,
+            body = postData.body,
+            tags = postData.tags,
+            qualityScore = assessQuality(postData.body)
+        )
+
+        // Moderate it
+        val moderation = delegate(team.moderator) { moderate(post) }
+
+        when (moderation) {
+            is ModerationDecision.Hide -> return Err(PostRejected(moderation.reason))
+            is ModerationDecision.Flag -> {
+                val flaggedPost = post.copy(flagged = true, flagReason = moderation.reason)
+                ContentDatabase.withConnection { conn ->
+                    conn.insert(flaggedPost)
+                }
+                return Ok(flaggedPost)
+            }
+            is ModerationDecision.Approve -> {
+                val publishedPost = post.copy(publishedAt = now())
+                ContentDatabase.withConnection { conn ->
+                    conn.insert(publishedPost)
+                }
+                return Ok(publishedPost)
+            }
+        }
+    }
+
+    intent fun getFeed(user: User): List<Post> {
+        return delegate(team.recommender) { recommend(user) }
+    }
+}
+
+
+// ======================== Feature Specs =========================
+
+feature("Content Platform") {
+
+    spec("users can create posts") {
+        given {
+            val user = authenticatedUser()
+            val postData = validPostInput()
+        }
+        whenever {
+            val result = orchestrator.publishPost(user, postData)
+        }
+        then {
+            result shouldBe Ok
+            result.value shouldExistIn ContentDatabase
+            result.value.author shouldBe user
+        }
+    }
+
+    spec("harmful content is caught") {
+        given {
+            val harmful = PostInput(
+                title = "Test",
+                body = "example harmful content"
+            )
+        }
+        whenever {
+            val result = orchestrator.publishPost(testUser, harmful)
+        }
+        then {
+            result shouldBe Err
+            result.error.reason shouldSemanticallyMatch "violates guidelines"
+        }
+    }
+
+    spec("personalized feed loads within SLA") {
+        given { val user = authenticatedUser() }
+        whenever { val feed = orchestrator.getFeed(user) }
+        then {
+            feed.size shouldBeGreaterThan 0
+            feed.all { it.qualityScore @ (>0.6) } shouldBe true
+            feed.topicDiversity() shouldBeAtLeast 3
+            responseTime shouldBeLessThan 200.milliseconds
+        }
+    }
+
+    deployment {
+        target = Kubernetes
+        replicas = autoScale(min = 2, max = 20)
+        regions = listOf(US_EAST, EU_WEST)
+    }
+}

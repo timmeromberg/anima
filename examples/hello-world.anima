@@ -1,0 +1,63 @@
+// hello-world.anima
+// The simplest Anima program — demonstrating basic syntax.
+
+module HelloWorld
+
+import { println } from "anima/io"
+
+fun main() {
+    println("Hello, Anima!")
+}
+
+
+// --- Basic functions ---
+
+fun greet(name: String): String = "Hello, $name!"
+
+fun add(a: Int, b: Int): Int = a + b
+
+
+// --- Data entities ---
+
+data entity Person(
+    val name: String,
+    val age: Int
+) {
+    invariant { age >= 0 }
+    invariant { name.isNotBlank() }
+}
+
+
+// --- Pattern matching ---
+
+fun describe(person: Person): String =
+    when {
+        person.age < 13 -> "${person.name} is a child"
+        person.age < 20 -> "${person.name} is a teenager"
+        else -> "${person.name} is an adult"
+    }
+
+
+// --- Extension functions ---
+
+fun String.shout(): String = this.uppercase() + "!"
+
+fun List<Int>.average(): Float =
+    if (this.isEmpty()) 0.0
+    else this.sum().toFloat() / this.size
+
+
+// --- Nullable types ---
+
+fun findUser(id: Int): Person? {
+    val users = mapOf(
+        1 to Person("Alice", 30),
+        2 to Person("Bob", 25)
+    )
+    return users[id]
+}
+
+fun greetUser(id: Int): String {
+    val user = findUser(id) ?: return "User not found"
+    return greet(user.name)
+}

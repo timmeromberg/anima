@@ -1,0 +1,451 @@
+(* ================================================================ *)
+(* Anima Language — Formal Grammar                                  *)
+(* Version: 0.1.0                                                   *)
+(* Syntax: Extended Backus-Naur Form (ISO 14977)                    *)
+(*                                                                  *)
+(* This is the canonical grammar. The human-readable version with   *)
+(* explanations is in docs/spec/02-grammar.md.                      *)
+(* ================================================================ *)
+
+
+(* ======================== Top Level ============================= *)
+
+program = { declaration } ;
+
+declaration = import_decl
+            | module_decl
+            | entity_decl
+            | interface_decl
+            | sealed_decl
+            | type_alias
+            | fun_decl
+            | intent_decl
+            | evolving_decl
+            | fuzzy_decl
+            | agent_decl
+            | feature_decl
+            | context_decl
+            | resource_decl
+            | protocol_decl ;
+
+
+(* ======================== Modules & Imports ===================== *)
+
+module_decl = "module" , qualified_ident ;
+
+import_decl = "import" , "{" , ident , { "," , ident } , "}" ,
+              "from" , string_literal ,
+              [ "as" , ident ] ;
+
+
+(* ======================== Functions ============================= *)
+
+fun_decl = { modifier } , "fun" , [ type_params ] ,
+           [ receiver_type , "." ] , ident ,
+           "(" , [ param_list ] , ")" ,
+           [ ":" , type_expr ] ,
+           [ context_clause ] ,
+           ( block | "=" , expr ) ;
+
+modifier = "public" | "private" | "internal" | "protected"
+         | "suspend" | "inline" | "override" ;
+
+param_list = param , { "," , param } ;
+param = ident , ":" , type_expr , [ "=" , expr ] ;
+
+receiver_type = type_expr ;
+
+context_clause = "needs" , context_ref , { "," , context_ref }
+               | "reads" , context_ref , { "," , context_ref } ;
+
+context_ref = qualified_ident ;
+
+
+(* ======================== Intent Functions ====================== *)
+
+intent_decl = { modifier } , "intent" , "fun" , [ type_params ] ,
+              ident ,
+              "(" , [ param_list ] , ")" , ":" , type_expr ,
+              [ context_clause ] ,
+              intent_body ;
+
+intent_body = "{" , { intent_clause } , "}" ;
+
+intent_clause = ensure_clause
+              | prefer_clause
+              | avoid_clause
+              | assume_clause
+              | hint_clause
+              | cost_clause
+              | fallback_clause
+              | adapt_clause
+              | statement ;
+
+ensure_clause   = "ensure" , block ;
+prefer_clause   = "prefer" , block , [ "weight" , float_literal ] ;
+avoid_clause    = "avoid" , block , [ "weight" , float_literal ] ;
+assume_clause   = "assume" , block ;
+hint_clause     = "hint" , "(" , string_literal , ")" ;
+cost_clause     = "cost" , "{" , { cost_field } , "}" ;
+cost_field      = ident , "=" , expr ;
+fallback_clause = "fallback" , block ;
+adapt_clause    = "adapt" , "<" , type_expr , ">" , ( lambda | block ) ;
+
+
+(* ======================== Evolving Functions ==================== *)
+
+evolving_decl = "evolving" , intent_decl_with_strategy ;
+
+intent_decl_with_strategy = { modifier } , "intent" , "fun" ,
+                            [ type_params ] ,
+                            ident ,
+                            "(" , [ param_list ] , ")" , ":" , type_expr ,
+                            [ context_clause ] ,
+                            "{" , { intent_clause } ,
+                            [ strategy_block ] ,
+                            [ evolve_block ] ,
+                            "}" ;
+
+strategy_block = "strategy" , block ;
+
+evolve_block = "evolve" , "{" , { evolve_clause } , "}" ;
+
+evolve_clause = fitness_block
+              | allow_block
+              | forbid_block
+              | trigger_clause
+              | rollback_clause
+              | review_block ;
+
+fitness_block   = "fitness" , "{" , { fitness_metric } , "}" ;
+fitness_metric  = ident , "weight" , float_literal ;
+
+allow_block     = "allow" , "{" , { allow_rule } , "}" ;
+allow_rule      = ident , [ "(" , [ arg_list ] , ")" ] ;
+
+forbid_block    = "forbid" , "{" , { forbid_rule } , "}" ;
+forbid_rule     = ident , [ "(" , [ arg_list ] , ")" ] ;
+
+trigger_clause  = "triggerWhen" , block ;
+rollback_clause = "rollbackWhen" , block ;
+
+review_block    = "review" , "{" , { review_rule } , "}" ;
+review_rule     = "autoApproveIf" , block
+               | "humanApproveIf" , block ;
+
+
+(* ======================== Fuzzy Predicates ====================== *)
+
+fuzzy_decl = "fuzzy" , "fun" , [ type_params ] ,
+             [ receiver_type , "." ] , ident ,
+             "(" , [ param_list ] , ")" , ":" , "Boolean" ,
+             fuzzy_body ;
+
+fuzzy_body = "{" , { fuzzy_clause } , "}" ;
+
+fuzzy_clause = factors_block
+             | metric_block
+             | statement ;
+
+factors_block = "factors" , "{" , { factor } , "}" ;
+factor        = expr , "weight" , float_literal ;
+
+metric_block  = "metric" , block ;
+
+
+(* ======================== Agents ================================ *)
+
+agent_decl = "agent" , ident ,
+             [ "(" , [ param_list ] , ")" ] ,
+             [ ":" , type_expr , { "," , type_expr } ] ,
+             agent_body ;
+
+agent_body = "{" , { agent_section } , "}" ;
+
+agent_section = agent_context_section
+              | tools_section
+              | boundaries_section
+              | team_section
+              | intent_decl
+              | fun_decl
+              | on_handler ;
+
+agent_context_section = "context" , "{" , { field_decl } , "}" ;
+
+tools_section = "tools" , "{" , { tool_fun_decl } , "}" ;
+tool_fun_decl = "fun" , ident , "(" , [ param_list ] , ")" ,
+                ":" , type_expr ;
+
+boundaries_section = "boundaries" , "{" , { boundary_rule } , "}" ;
+boundary_rule = ident , "=" , expr
+              | "can" , block
+              | "cannot" , block
+              | "requiresApproval" , block ;
+
+team_section = "team" , "{" , { team_member } , "}" ;
+team_member  = "val" , ident , "=" , "spawn" , "<" , type_expr , ">" ,
+               "(" , [ arg_list ] , ")" ;
+
+on_handler = "on" , "<" , type_expr , ">" , ( lambda | block ) ;
+
+
+(* ======================== Types ================================= *)
+
+type_expr = primitive_type
+          | qualified_ident , [ type_args ]
+          | type_expr , "@" , confidence_expr
+          | type_expr , "|" , type_expr
+          | type_expr , "&" , type_expr
+          | type_expr , "?"
+          | "NL" , [ "<" , ident , ">" ]
+          | "Fuzzy" , "<" , type_expr , ">"
+          | "Intent" , "<" , type_expr , ">"
+          | "Stream" , "<" , type_expr , ">"
+          | "List" , "<" , type_expr , ">"
+          | "MutableList" , "<" , type_expr , ">"
+          | "Set" , "<" , type_expr , ">"
+          | "Map" , "<" , type_expr , "," , type_expr , ">"
+          | "MutableMap" , "<" , type_expr , "," , type_expr , ">"
+          | "[" , type_expr , { "," , type_expr } , "]"
+          | "(" , [ param_types ] , ")" , "->" , type_expr ;
+
+primitive_type = "Int" | "Float" | "String" | "Bool"
+               | "Byte" | "Unit" | "Any" | "Nothing" | "ID"
+               | "DateTime" ;
+
+confidence_expr = float_literal
+                | "Confidence"
+                | "(" , ">" , float_literal , ")"
+                | "(" , "<" , float_literal , ")"
+                | "(" , float_literal , ".." , float_literal , ")" ;
+
+type_params = "<" , type_param , { "," , type_param } , ">" ;
+type_param  = ident , [ ":" , type_expr ] ;
+type_args   = "<" , type_expr , { "," , type_expr } , ">" ;
+
+param_types = type_expr , { "," , type_expr } ;
+
+
+(* ======================== Data Entities ========================= *)
+
+entity_decl = "data" , "entity" , ident , [ type_params ] ,
+              "(" , field_param , { "," , field_param } , ")" ,
+              [ ":" , type_expr , { "," , type_expr } ] ,
+              [ entity_body ] ;
+
+field_param = ( "val" | "var" ) , ident , ":" , type_expr ,
+              [ "=" , expr ] ;
+
+entity_body = "{" , { invariant_clause | fun_decl } , "}" ;
+
+invariant_clause = "invariant" , block ;
+
+
+(* ======================== Sealed Classes ======================== *)
+
+sealed_decl = "sealed" , "class" , ident , [ type_params ] ,
+              [ ":" , type_expr ] ,
+              "{" , { sealed_member } , "}" ;
+
+sealed_member = "data" , "class" , ident ,
+                "(" , { field_param , "," } , ")" ,
+                ":" , type_expr , "()"
+              | "object" , ident , ":" , type_expr , "()" ;
+
+
+(* ======================== Interfaces ============================ *)
+
+interface_decl = "interface" , ident , [ type_params ] ,
+                 [ ":" , type_expr , { "," , type_expr } ] ,
+                 "{" , { interface_member } , "}" ;
+
+interface_member = abstract_field | fun_signature | fun_decl ;
+abstract_field   = "val" , ident , ":" , type_expr ;
+fun_signature    = "fun" , ident , "(" , [ param_list ] , ")" ,
+                   ":" , type_expr ;
+
+
+(* ======================== Type Aliases ========================== *)
+
+type_alias = "type" , ident , [ type_params ] , "=" , type_expr ;
+
+
+(* ======================== Expressions =========================== *)
+
+expr = literal
+     | ident
+     | "this"
+     | "self"
+     | expr , "." , ident
+     | expr , "?." , ident
+     | expr , "!!"
+     | expr , "(" , [ arg_list ] , ")"
+     | expr , [ type_args ] , "(" , [ arg_list ] , ")"
+     | expr , "@" , confidence_expr
+     | expr , "?:" , expr
+     | "delegate" , "(" , expr , ")" , lambda
+     | "parallel" , lambda
+     | "recall" , "(" , expr , ")"
+     | "ask" , "(" , expr , ")"
+     | "diagnose" , "(" , expr , ")"
+     | "emit" , "(" , expr , ")"
+     | expr , "is" , type_expr
+     | expr , "as" , type_expr
+     | expr , "as?" , type_expr
+     | expr , "~=" , expr
+     | expr , "~>" , expr
+     | expr , "<~" , expr
+     | expr , "in" , expr
+     | expr , ".." , expr
+     | when_expr
+     | if_expr
+     | lambda
+     | string_template
+     | binary_expr
+     | unary_expr
+     | "(" , expr , ")" ;
+
+when_expr = "when" , [ "(" , expr , ")" ] ,
+            "{" , { when_branch } , "}" ;
+when_branch = when_cond , "->" , ( expr | block )
+            | "else" , "->" , ( expr | block ) ;
+when_cond = "is" , type_expr , [ "@" , confidence_expr ]
+          | expr ;
+
+if_expr = "if" , "(" , expr , ")" , block ,
+          [ "else" , ( if_expr | block ) ] ;
+
+lambda = "{" , [ lambda_params , "->" ] , { statement } , "}" ;
+lambda_params = ident , { "," , ident } ;
+
+string_template = '"' , { text_segment | "${" , expr , "}" | "$" , ident } , '"' ;
+
+binary_expr = expr , binary_op , expr ;
+binary_op = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | ">"
+          | "<=" | ">=" | "&&" | "||" ;
+
+unary_expr = unary_op , expr ;
+unary_op = "-" | "!" ;
+
+arg_list = arg , { "," , arg } ;
+arg = [ ident , "=" ] , expr ;
+
+
+(* ======================== Statements ============================ *)
+
+statement = val_decl
+          | var_decl
+          | assignment
+          | return_stmt
+          | for_stmt
+          | while_stmt
+          | expr_stmt ;
+
+val_decl   = "val" , pattern , [ ":" , type_expr ] , "=" , expr ;
+var_decl   = "var" , ident , [ ":" , type_expr ] , [ "=" , expr ] ;
+assignment = expr , "=" , expr ;
+return_stmt = "return" , [ expr ] ;
+for_stmt   = "for" , "(" , ident , "in" , expr , ")" , block ;
+while_stmt = "while" , "(" , expr , ")" , block ;
+expr_stmt  = expr ;
+
+
+(* ======================== Patterns ============================== *)
+
+pattern = ident
+        | "(" , ident , { "," , ident } , ")"
+        | "_" ;
+
+
+(* ======================== Features & Specs ====================== *)
+
+feature_decl = "feature" , "(" , string_literal , ")" , feature_body ;
+feature_body = "{" , { spec_decl | deployment_block } , "}" ;
+
+spec_decl = "spec" , "(" , string_literal , ")" ,
+            "{" , given_block , whenever_block , then_block , "}" ;
+
+given_block    = "given" , block ;
+whenever_block = "whenever" , block ;
+then_block     = "then" , block ;
+
+deployment_block = "deployment" , "{" , { deploy_field } , "}" ;
+deploy_field     = ident , "=" , expr ;
+
+
+(* ======================== Context & Memory ====================== *)
+
+context_decl = "context" , ident ,
+               "{" , { context_tier } , [ auto_learn_block ] ,
+               [ decay_block ] , "}" ;
+
+context_tier = ( "persistent" | "session" | "ephemeral" ) ,
+               "{" , { field_decl } , "}" ;
+
+auto_learn_block = "autoLearn" , "{" , { learn_rule } , "}" ;
+learn_rule = "rule" , "(" , string_literal , ")" ,
+             "{" , whenever_clause , store_clause , "}" ;
+whenever_clause = "whenever" , block ;
+store_clause    = "store" , block ;
+
+decay_block = "decay" , "{" , { decay_field } , "}" ;
+decay_field = ident , "=" , expr ;
+
+field_decl = ( "val" | "var" ) , ident , ":" , type_expr ,
+             [ "=" , expr ] ;
+
+
+(* ======================== Shared Resources ====================== *)
+
+resource_decl = "shared" , "resource" , ident ,
+                "(" , [ param_list ] , ")" ,
+                "{" , access_policy , "}" ;
+
+access_policy = "accessPolicy" , "{" , { policy_rule } , "}" ;
+policy_rule   = ident , "=" , expr
+              | "onConflict" , lambda ;
+
+
+(* ======================== Protocols ============================= *)
+
+protocol_decl = "protocol" , ident ,
+                "{" , { message_decl } , "}" ;
+
+message_decl = "message" , ident ,
+               "(" , { field_param , [ "," ] } , ")" ;
+
+
+(* ======================== Blocks ================================ *)
+
+block = "{" , { statement } , "}" ;
+
+
+(* ======================== Literals ============================== *)
+
+literal = int_literal
+        | float_literal
+        | string_literal
+        | bool_literal
+        | "null" ;
+
+int_literal   = digit , { digit | "_" } ;
+float_literal = digit , { digit } , "." , digit , { digit } ;
+bool_literal  = "true" | "false" ;
+string_literal = '"' , { character } , '"' ;
+
+
+(* ======================== Identifiers =========================== *)
+
+ident = letter , { letter | digit | "_" } ;
+qualified_ident = ident , { "." , ident } ;
+
+letter = "a" | "b" | (* ... *) | "z"
+       | "A" | "B" | (* ... *) | "Z" ;
+digit  = "0" | "1" | (* ... *) | "9" ;
+
+
+(* ======================== Comments ============================== *)
+
+(* Single-line comments start with // *)
+(* Multi-line comments are delimited by /* and */ *)
+(* Multi-line comments may be nested *)

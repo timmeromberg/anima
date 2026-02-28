@@ -1,0 +1,91 @@
+// confidence-types.anima
+// Demonstrating Anima's confidence type system.
+
+module ConfidenceDemo
+
+import { println } from "anima/io"
+import { Image, Label } from "anima/vision"
+
+
+// --- Basic confidence annotation ---
+
+fun classify(image: Image): Label @ Confidence {
+    // Returns a label with a confidence score
+    return "cat" @ 0.92
+}
+
+
+// --- Confidence-aware branching ---
+
+fun processClassification(image: Image) {
+    val result = classify(image)
+
+    when (result) {
+        is Label @ (>0.95) -> {
+            println("High confidence: ${result.value}")
+            autoProcess(result.value)
+        }
+        is Label @ (>0.70) -> {
+            println("Medium confidence: ${result.value} @ ${result.confidence}")
+            requestHumanVerification(result)
+        }
+        is Label @ _ -> {
+            println("Low confidence: ${result.confidence}")
+            escalate("Cannot classify image reliably")
+        }
+    }
+}
+
+
+// --- Confidence propagation ---
+
+fun sensorFusion(): Float @ Confidence {
+    val tempA: Float @ 0.9 = sensor1.readTemperature()
+    val tempB: Float @ 0.85 = sensor2.readTemperature()
+
+    // Compiler infers: Float @ 0.765 (0.9 * 0.85)
+    val combined = (tempA + tempB) / 2.0
+
+    return combined
+}
+
+
+// --- Decomposing confidence ---
+
+fun analyzeReading(sensor: Sensor) {
+    val reading: Float @ Confidence = sensor.read()
+
+    val (value, confidence) = reading.decompose()
+    println("Value: $value, Confidence: $confidence")
+
+    if (confidence < 0.5) {
+        println("WARNING: Low confidence reading, recalibrate sensor")
+    }
+}
+
+
+// --- Functions that require confident inputs ---
+
+fun <T> requireConfident(value: T @ (>0.95)): T {
+    // Type system guarantees confidence > 0.95
+    return value.unwrap()
+}
+
+fun criticalDecision(data: SensorData @ (>0.99)) {
+    // This function can only be called with very high confidence data
+    // The compiler enforces this at call sites
+    executeAction(data.unwrap())
+}
+
+
+// --- Confidence in collections ---
+
+fun filterReliable(predictions: List<Label @ Confidence>): List<Label> {
+    return predictions
+        .filter { it.confidence > 0.8 }
+        .map { it.unwrap() }
+}
+
+fun bestPrediction(predictions: List<Label @ Confidence>): Label @ Confidence {
+    return predictions.maxBy { it.confidence }
+}
