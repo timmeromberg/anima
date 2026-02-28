@@ -1,0 +1,142 @@
+================================================================================
+Simple agent
+================================================================================
+
+agent Moderator {
+    tools {
+        fun classify(text: NL): String
+    }
+
+    boundaries {
+        maxTime = 5
+        can { readPosts }
+        cannot { deletePosts }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (agent_declaration
+    name: (identifier)
+    body: (agent_body
+      (tools_section
+        (tool_declaration
+          name: (identifier)
+          parameters: (parameter_list
+            (parameter
+              name: (identifier)
+              type: (nl_type)))
+          return_type: (primitive_type)))
+      (boundaries_section
+        (boundary_assignment
+          name: (identifier)
+          value: (int_literal))
+        (can_block
+          (block
+            (expression_statement
+              (identifier))))
+        (cannot_block
+          (block
+            (expression_statement
+              (identifier))))))))
+
+================================================================================
+Agent with context
+================================================================================
+
+agent Tracker {
+    context {
+        var count: Int = 0
+        val history: List<String> = emptyList()
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (agent_declaration
+    name: (identifier)
+    body: (agent_body
+      (agent_context_section
+        (field_declaration
+          name: (identifier)
+          type: (primitive_type)
+          value: (int_literal))
+        (field_declaration
+          name: (identifier)
+          type: (generic_type
+            (primitive_type))
+          value: (call_expression
+            function: (identifier)))))))
+
+================================================================================
+Agent with team
+================================================================================
+
+agent Boss {
+    team {
+        val worker = spawn<Worker>()
+    }
+
+    intent fun doWork(task: String): String {
+        ensure { output.length > 0 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (agent_declaration
+    name: (identifier)
+    body: (agent_body
+      (team_section
+        (team_member
+          name: (identifier)
+          agent_type: (type_identifier
+            (identifier))))
+      (intent_declaration
+        name: (identifier)
+        parameters: (parameter_list
+          (parameter
+            name: (identifier)
+            type: (primitive_type)))
+        return_type: (primitive_type)
+        body: (intent_body
+          (ensure_clause
+            (block
+              (expression_statement
+                (binary_expression
+                  left: (member_expression
+                    object: (identifier)
+                    member: (identifier))
+                  right: (int_literal))))))))))
+
+================================================================================
+Agent with on handler
+================================================================================
+
+agent Listener {
+    on<MessageReceived> { event ->
+        log(event.content)
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (agent_declaration
+    name: (identifier)
+    body: (agent_body
+      (on_handler
+        event_type: (type_identifier
+          (identifier))
+        (lambda_expression
+          (lambda_parameters
+            (identifier))
+          (expression_statement
+            (call_expression
+              function: (identifier)
+              (member_expression
+                object: (identifier)
+                member: (identifier)))))))))

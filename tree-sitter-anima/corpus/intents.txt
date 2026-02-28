@@ -1,0 +1,189 @@
+================================================================================
+Simple intent function
+================================================================================
+
+intent fun sort(arr: List<Int>): List<Int> {
+    ensure { output.isAscending() }
+    prefer { timeComplexity <= 100 } weight 0.8
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (intent_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (generic_type
+          (primitive_type))))
+    return_type: (generic_type
+      (primitive_type))
+    body: (intent_body
+      (ensure_clause
+        (block
+          (expression_statement
+            (call_expression
+              function: (member_expression
+                object: (identifier)
+                member: (identifier))))))
+      (prefer_clause
+        (block
+          (expression_statement
+            (binary_expression
+              left: (identifier)
+              right: (int_literal))))
+        (float_literal)))))
+
+================================================================================
+Intent with hint and fallback
+================================================================================
+
+intent fun summarize(doc: NL): NL {
+    ensure { output.length < 100 }
+    hint("keep it concise")
+    fallback { doc }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (intent_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (nl_type)))
+    return_type: (nl_type)
+    body: (intent_body
+      (ensure_clause
+        (block
+          (expression_statement
+            (binary_expression
+              left: (member_expression
+                object: (identifier)
+                member: (identifier))
+              right: (int_literal)))))
+      (hint_clause
+        (string_literal))
+      (fallback_clause
+        (block
+          (expression_statement
+            (identifier)))))))
+
+================================================================================
+Intent with adapt
+================================================================================
+
+intent fun fetch(url: String): String {
+    adapt<ConnectionTimeout> {
+        retry()
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (intent_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (primitive_type)))
+    return_type: (primitive_type)
+    body: (intent_body
+      (adapt_clause
+        error_type: (type_identifier
+          (identifier))
+        (block
+          (expression_statement
+            (call_expression
+              function: (identifier))))))))
+
+================================================================================
+Evolving function
+================================================================================
+
+evolving intent fun recommend(user: User): List<Post> {
+    ensure { output.size <= 10 }
+
+    strategy {
+        val items = getItems()
+        items
+    }
+
+    evolve {
+        fitness {
+            clickRate weight 0.5
+            shareRate weight 0.5
+        }
+        allow {
+            modifyRanking()
+        }
+        forbid {
+            useDarkPatterns()
+        }
+        triggerWhen { fitness.score < 0.4 }
+        rollbackWhen { fitness.score < 0.2 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (evolving_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_identifier
+          (identifier))))
+    return_type: (generic_type
+      (type_identifier
+        (identifier)))
+    (ensure_clause
+      (block
+        (expression_statement
+          (binary_expression
+            left: (member_expression
+              object: (identifier)
+              member: (identifier))
+            right: (int_literal)))))
+    (strategy_block
+      (block
+        (val_declaration
+          pattern: (identifier)
+          value: (call_expression
+            function: (identifier)))
+        (expression_statement
+          (identifier))))
+    (evolve_block
+      (fitness_block
+        (fitness_metric
+          name: (identifier)
+          value: (float_literal))
+        (fitness_metric
+          name: (identifier)
+          value: (float_literal)))
+      (allow_block
+        (evolution_rule
+          (identifier)))
+      (forbid_block
+        (evolution_rule
+          (identifier)))
+      (trigger_clause
+        (block
+          (expression_statement
+            (binary_expression
+              left: (member_expression
+                object: (identifier)
+                member: (identifier))
+              right: (float_literal)))))
+      (rollback_clause
+        (block
+          (expression_statement
+            (binary_expression
+              left: (member_expression
+                object: (identifier)
+                member: (identifier))
+              right: (float_literal))))))))

@@ -1,0 +1,20 @@
+{
+  "grammars": [
+    {
+      "name": "anima",
+      "camelcase": "Anima",
+      "scope": "source.anima",
+      "file-types": ["anima"],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^anima$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for the Anima programming language",
+    "links": {
+      "repository": "https://github.com/example/tree-sitter-anima"
+    }
+  }
+}

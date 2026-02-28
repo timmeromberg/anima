@@ -1,0 +1,196 @@
+================================================================================
+Binary expressions
+================================================================================
+
+fun test(): Int {
+    val x = 1 + 2 * 3
+    return x
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list)
+    return_type: (primitive_type)
+    body: (block
+      (val_declaration
+        pattern: (identifier)
+        value: (binary_expression
+          left: (int_literal)
+          right: (binary_expression
+            left: (int_literal)
+            right: (int_literal))))
+      (return_statement
+        value: (identifier)))))
+
+================================================================================
+When expression
+================================================================================
+
+fun check(x: Int): String {
+    return when (x) {
+        is Int -> "number"
+        else -> "unknown"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (primitive_type)))
+    return_type: (primitive_type)
+    body: (block
+      (return_statement
+        value: (when_expression
+          subject: (identifier)
+          (when_branch
+            condition: (when_condition
+              (primitive_type))
+            body: (string_literal))
+          (when_branch
+            body: (string_literal)))))))
+
+================================================================================
+If expression
+================================================================================
+
+fun max(a: Int, b: Int): Int {
+    if (a > b) {
+        return a
+    } else {
+        return b
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (primitive_type))
+      (parameter
+        name: (identifier)
+        type: (primitive_type)))
+    return_type: (primitive_type)
+    body: (block
+      (if_expression
+        condition: (binary_expression
+          left: (identifier)
+          right: (identifier))
+        consequence: (block
+          (return_statement
+            value: (identifier)))
+        alternative: (block
+          (return_statement
+            value: (identifier)))))))
+
+================================================================================
+Safe calls and elvis
+================================================================================
+
+fun safe(x: String?): String {
+    val len = x?.length ?: 0
+    return len
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (nullable_type
+          (primitive_type))))
+    return_type: (primitive_type)
+    body: (block
+      (val_declaration
+        pattern: (identifier)
+        value: (elvis_expression
+          value: (safe_member_expression
+            object: (identifier)
+            member: (identifier))
+          fallback: (int_literal)))
+      (return_statement
+        value: (identifier)))))
+
+================================================================================
+Lambda expression
+================================================================================
+
+fun apply(): Int {
+    val fn = { x: Int -> x + 1 }
+    return fn(5)
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list)
+    return_type: (primitive_type)
+    body: (block
+      (val_declaration
+        pattern: (identifier)
+        value: (lambda_expression
+          (lambda_parameters
+            (identifier))
+          (expression_statement
+            (binary_expression
+              left: (identifier)
+              right: (int_literal)))))
+      (return_statement
+        value: (call_expression
+          function: (identifier)
+          (int_literal))))))
+
+================================================================================
+For loop
+================================================================================
+
+fun count(items: List<Int>): Int {
+    var total = 0
+    for (item in items) {
+        total = total + item
+    }
+    return total
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (generic_type
+          (primitive_type))))
+    return_type: (primitive_type)
+    body: (block
+      (var_declaration
+        name: (identifier)
+        value: (int_literal))
+      (for_statement
+        variable: (identifier)
+        iterable: (identifier)
+        body: (block
+          (assignment_statement
+            target: (identifier)
+            value: (binary_expression
+              left: (identifier)
+              right: (identifier)))))
+      (return_statement
+        value: (identifier)))))
