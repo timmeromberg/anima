@@ -1,0 +1,318 @@
+// multi-agent-collaboration.anima
+// A research team of agents collaborating on complex analysis tasks,
+// demonstrating protocols, message passing, team declarations,
+// delegate/parallel/spawn, and agent coordination.
+
+module ResearchCollaboration
+
+import { NL, Fuzzy } from "anima/core"
+import { embed, similarity, summarize } from "anima/ml"
+import { HttpClient } from "anima/http"
+
+
+// ======================== Domain Entities ========================
+
+data entity ResearchQuery(
+    val id: ID,
+    val topic: NL,
+    val scope: NL,
+    val requiredConfidence: Float = 0.8,
+    val deadline: DateTime
+)
+
+data entity Finding(
+    val id: ID,
+    val source: NL,
+    val claim: NL,
+    val evidence: NL,
+    val credibility: Float @ Confidence,
+    val timestamp: DateTime = now()
+)
+
+data entity AnalysisReport(
+    val queryId: ID,
+    val synthesis: NL,
+    val findings: List<Finding>,
+    val overallConfidence: Float @ Confidence,
+    val dissent: List<NL>,
+    val recommendations: List<NL>
+)
+
+
+// ======================== Protocols ==============================
+
+// Defines the messages agents can exchange during collaboration
+protocol ResearchProtocol {
+    message AssignTask(
+        val taskId: ID,
+        val description: NL,
+        val priority: Int
+    )
+    message SubmitFinding(
+        val taskId: ID,
+        val finding: Finding
+    )
+    message RequestReview(
+        val findingId: ID,
+        val finding: Finding
+    )
+    message ReviewResult(
+        val findingId: ID,
+        val approved: Boolean,
+        val feedback: NL
+    )
+    message SynthesisRequest(
+        val queryId: ID,
+        val findings: List<Finding>
+    )
+    message Consensus(
+        val queryId: ID,
+        val agreed: Boolean,
+        val points: List<NL>
+    )
+}
+
+
+// ======================== Data Gatherer Agent =====================
+
+agent DataGatherer(
+    private val specialization: NL
+) : ResearchProtocol {
+    context {
+        val collectedFindings: MutableList<Finding> = mutableListOf()
+        var searchesPerformed: Int = 0
+    }
+
+    tools {
+        fun searchAcademic(query: NL): List<Finding>
+        fun searchNews(query: NL): List<Finding>
+        fun extractClaims(document: NL): List<NL>
+        fun assessSourceCredibility(source: NL): Float @ Confidence
+    }
+
+    boundaries {
+        maxCost = 0.50.dollars per query
+        maxTime = 60.seconds
+        maxToolCalls = 50
+
+        can { searchPublicDatabases; readDocuments; extractCitations }
+        cannot { modifyDocuments; publishFindings; contactAuthors }
+    }
+
+    intent fun gatherEvidence(topic: NL, scope: NL): List<Finding> {
+        ensure { output.size >= 3 }
+        ensure { output.all { it.credibility @ (>0.5) } }
+        prefer { output.sourcesDiverse() }
+        prefer { output.coverMultiplePerspectives(topic) }
+        avoid  { output.any { it.source ~= specialization } }
+
+        val academic = searchAcademic(topic)
+        val news = searchNews(topic)
+        val combined = academic + news
+
+        val findings = combined.filter { finding ->
+            val credibility = assessSourceCredibility(finding.source)
+            credibility @ (>0.5)
+        }
+
+        context.collectedFindings = findings.toMutableList()
+        context.searchesPerformed++
+        return findings
+    }
+}
+
+
+// ======================== Fact Checker Agent ======================
+
+agent FactChecker : ResearchProtocol {
+    context {
+        var reviewsCompleted: Int = 0
+        var approvalRate: Float = 0.0
+    }
+
+    tools {
+        fun crossReference(claim: NL): List<Finding> @ Confidence
+        fun detectBias(text: NL): Float @ Confidence
+        fun verifyStatistics(claim: NL): Boolean @ Confidence
+    }
+
+    boundaries {
+        maxCost = 0.20.dollars per review
+        maxTime = 30.seconds
+
+        can { readFindings; crossReferenceSources; flagInconsistencies }
+        cannot { deleteFindings; modifyOriginalSources }
+    }
+
+    intent fun reviewFinding(finding: Finding): ReviewResult {
+        ensure { result.hasSubstantiveFeedback() }
+        prefer { result.isUnbiased() }
+        avoid  { result.isRubberStamp() }
+
+        val crossRefs = crossReference(finding.claim)
+        val biasScore = detectBias(finding.evidence)
+        val statsValid = verifyStatistics(finding.claim)
+
+        val approved = crossRefs @ (>0.7) && biasScore @ (<0.3) && statsValid @ (>0.8)
+
+        context.reviewsCompleted++
+        return ReviewResult(finding.id, approved, summarize(crossRefs))
+    }
+}
+
+
+// ======================== Synthesizer Agent =======================
+
+agent Synthesizer : ResearchProtocol {
+    context {
+        var reportsGenerated: Int = 0
+    }
+
+    tools {
+        fun identifyThemes(findings: List<Finding>): List<NL>
+        fun detectContradictions(findings: List<Finding>): List<NL>
+        fun generateSynthesis(findings: List<Finding>, themes: List<NL>): NL
+        fun assessOverallConfidence(findings: List<Finding>): Float @ Confidence
+    }
+
+    boundaries {
+        maxCost = 0.30.dollars per synthesis
+        maxTime = 45.seconds
+
+        can { readFindings; generateReports; identifyPatterns }
+        cannot { fabricateFindings; suppressDissent }
+    }
+
+    intent fun synthesize(query: ResearchQuery, findings: List<Finding>): AnalysisReport {
+        ensure { output.findings.size >= 3 }
+        ensure { output.synthesis.length > 100 }
+        prefer { output.addressesAllAspects(query.scope) }
+        prefer { output.dissent.isNotEmpty() }
+        avoid  { output.synthesis ~= "inconclusive" }
+        avoid  { output.overallConfidence @ (<0.5) }
+
+        val themes = identifyThemes(findings)
+        val contradictions = detectContradictions(findings)
+        val synthesis = generateSynthesis(findings, themes)
+        val confidence = assessOverallConfidence(findings)
+
+        context.reportsGenerated++
+
+        return AnalysisReport(
+            queryId = query.id,
+            synthesis = synthesis,
+            findings = findings,
+            overallConfidence = confidence,
+            dissent = contradictions,
+            recommendations = themes
+        )
+    }
+}
+
+
+// ======================== Research Director Agent =================
+
+agent ResearchDirector {
+    team {
+        val gatherer1 = spawn<DataGatherer>(specialization = "academic literature")
+        val gatherer2 = spawn<DataGatherer>(specialization = "industry reports")
+        val checker = spawn<FactChecker>()
+        val synthesizer = spawn<Synthesizer>()
+    }
+
+    boundaries {
+        maxCost = 2.0.dollars per query
+        maxTime = 5.minutes
+
+        can { coordinateTeam; assignTasks; generateFinalReport }
+        cannot { overrideFactChecks; bypassReview }
+    }
+
+    intent fun conductResearch(query: ResearchQuery): AnalysisReport {
+        ensure { output.overallConfidence @ (>0.6) }
+        ensure { output.findings.size >= 5 }
+        prefer { output.isComprehensive() }
+        avoid  { output.hasMajorGaps(query.scope) }
+
+        // Phase 1: Parallel data gathering from multiple specializations
+        val allFindings = parallel {
+            val batch1 = delegate(team.gatherer1) { gatherEvidence(query.topic, query.scope) }
+            val batch2 = delegate(team.gatherer2) { gatherEvidence(query.topic, query.scope) }
+            batch1 + batch2
+        }
+
+        // Phase 2: Fact-check each finding
+        val verifiedFindings = allFindings.filter { finding ->
+            val review = delegate(team.checker) { reviewFinding(finding) }
+            review.approved
+        }
+
+        // Phase 3: Synthesize verified findings into a report
+        val report = delegate(team.synthesizer) {
+            synthesize(query, verifiedFindings)
+        }
+
+        return report
+
+        adapt<InsufficientFindings> {
+            hint("not enough verified findings, broaden search scope")
+            val broadened = query.copy(scope = "expanded: ${query.scope}")
+            conductResearch(broadened)
+        }
+
+        fallback {
+            AnalysisReport(
+                queryId = query.id,
+                synthesis = "Insufficient data to produce a reliable analysis",
+                findings = verifiedFindings,
+                overallConfidence = 0.3 @ 0.5,
+                dissent = listOf("Analysis could not be completed with available data"),
+                recommendations = listOf("Retry with a broader scope or extended deadline")
+            )
+        }
+    }
+}
+
+
+// ======================== Feature Specs ==========================
+
+feature("Research Collaboration") {
+
+    spec("parallel gathering produces diverse findings") {
+        given {
+            val query = ResearchQuery(
+                id = testId(),
+                topic = "impact of AI on healthcare diagnostics",
+                scope = "peer-reviewed studies from 2020-2024",
+                deadline = now() + 1.hours
+            )
+        }
+        whenever {
+            val report = director.conductResearch(query)
+        }
+        then {
+            report.findings.size shouldBeGreaterThan 5
+            report.findings.sourcesDiverse() shouldBe true
+            report.overallConfidence @ (>0.6) shouldBe true
+        }
+    }
+
+    spec("fact checking filters unreliable findings") {
+        given {
+            val unreliable = Finding(
+                id = testId(),
+                source = "unverified blog post",
+                claim = "unsubstantiated claim",
+                evidence = "no citations provided",
+                credibility = 0.2 @ 0.9
+            )
+        }
+        whenever {
+            val review = checker.reviewFinding(unreliable)
+        }
+        then {
+            review.approved shouldBe false
+            review.feedback.length shouldBeGreaterThan 0
+        }
+    }
+}

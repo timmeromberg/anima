@@ -1,0 +1,275 @@
+// context-memory.anima
+// A personalized tutoring agent that learns and remembers student patterns,
+// demonstrating context declarations, persistent/session/ephemeral tiers,
+// autoLearn, decay, recall, and ask.
+
+module PersonalizedTutor
+
+import { NL } from "anima/core"
+import { similarity, embed } from "anima/ml"
+import { Logger } from "anima/logging"
+
+
+// ======================== Domain Entities ========================
+
+data entity Student(
+    val id: ID,
+    val name: String,
+    val gradeLevel: Int,
+    val subjects: List<String>,
+    val enrolledAt: DateTime
+) {
+    invariant { gradeLevel >= 1 }
+    invariant { gradeLevel <= 12 }
+}
+
+data entity LearningObjective(
+    val id: ID,
+    val subject: String,
+    val topic: NL,
+    val difficulty: Int,
+    val prerequisites: List<ID> = emptyList()
+) {
+    invariant { difficulty >= 1 }
+    invariant { difficulty <= 5 }
+}
+
+data entity AssessmentResult(
+    val objectiveId: ID,
+    val score: Float @ Confidence,
+    val timeSpent: Float,
+    val mistakes: List<NL>,
+    val completedAt: DateTime = now()
+)
+
+data entity LessonPlan(
+    val objectives: List<LearningObjective>,
+    val estimatedDuration: Float,
+    val adaptations: List<NL>,
+    val rationale: NL
+)
+
+
+// ======================== Context Declarations ===================
+
+// Long-term knowledge about each student persists across all sessions
+context StudentMemory {
+    persistent {
+        val learningStyle: NL by stored()
+        val strengthAreas: List<String> by stored()
+        val weaknessAreas: List<String> by stored()
+        val completedObjectives: MutableList<ID> by stored()
+        var overallMastery: Float by stored()
+        val preferredPace: String by stored()
+        var totalSessionCount: Int by stored()
+    }
+
+    session {
+        var currentMood: NL by inferred()
+        var focusLevel: Float by inferred()
+        var currentObjective: LearningObjective by assigned()
+        val sessionMistakes: MutableList<NL> = mutableListOf()
+        var sessionStartedAt: DateTime = now()
+    }
+
+    ephemeral {
+        var lastResponseTime: Float by measured()
+        var lastHintUsed: NL by tracked()
+        var currentStreak: Int = 0
+    }
+
+    autoLearn {
+        rule("detect learning style") {
+            whenever { sessionMistakes.size >= 10 }
+            store {
+                val pattern = analyzeMistakePatterns(sessionMistakes)
+                LearningStyleUpdate(
+                    style = pattern.inferredStyle,
+                    confidence = pattern.consistency
+                )
+            }
+        }
+
+        rule("update weakness areas") {
+            whenever { consecutiveFailures(currentObjective) >= 3 }
+            store {
+                WeaknessDetected(
+                    area = currentObjective.topic,
+                    severity = failureRate(currentObjective),
+                    suggestedRemediation = findPrerequisiteGaps(currentObjective)
+                )
+            }
+        }
+
+        rule("promote strength area") {
+            whenever { masteryScore(currentObjective) > 0.9 }
+            store {
+                StrengthConfirmed(
+                    area = currentObjective.topic,
+                    mastery = masteryScore(currentObjective)
+                )
+            }
+        }
+    }
+
+    decay {
+        rate = 0.02 per week
+        floor = 0.1
+        refreshOn = Access
+    }
+}
+
+
+// ======================== Shared Resources =======================
+
+shared resource CurriculumDatabase(
+    val capacity: Int = 500,
+    val conflictStrategy: ConflictStrategy = LastWriteWins
+) {
+    accessPolicy {
+        priority = byStudentUrgency()
+        fairness = noStarvationBeyond(10.seconds)
+        onConflict { mine, theirs ->
+            when {
+                mine.timestamp > theirs.timestamp -> mine
+                else -> theirs
+            }
+        }
+    }
+}
+
+
+// ======================== Tutoring Agent =========================
+
+agent TutoringAgent(
+    private val student: Student,
+    private val curriculum: List<LearningObjective>
+) {
+    context {
+        var lessonsDelivered: Int = 0
+        var avgSessionScore: Float = 0.0
+    }
+
+    tools {
+        fun generateExercise(objective: LearningObjective, difficulty: Int): NL
+        fun evaluateResponse(response: NL, expected: NL): AssessmentResult
+        fun generateHint(objective: LearningObjective, mistakes: List<NL>): NL
+        fun adaptDifficulty(current: Int, performance: Float): Int
+    }
+
+    boundaries {
+        maxCost = 0.50.dollars per session
+        maxTime = 60.minutes
+
+        can { generateContent; evaluateResponses; adjustDifficulty }
+        cannot { modifyGrades; accessOtherStudents; skipPrerequisites }
+    }
+
+    intent fun planLesson(): LessonPlan {
+        ensure { output.objectives.all { it.prerequisites.all { id -> isCompleted(id) } } }
+        ensure { output.estimatedDuration <= 45.0 }
+        prefer { output.matchesLearningStyle(recall("learning style")) }
+        prefer { output.addressesWeaknesses(recall("weakness areas")) }
+        avoid  { output.objectives.any { it.difficulty > student.gradeLevel + 1 } }
+
+        // Recall persistent memory about this student
+        val style = recall("learning style for ${student.name}")
+        val weaknesses = recall("weakness areas for ${student.name}")
+        val completedIds = recall("completed objectives for ${student.name}")
+
+        // Build lesson plan from curriculum gaps
+        val nextObjectives = curriculum
+            .filter { obj -> !completedIds.contains(obj.id) }
+            .filter { obj -> obj.prerequisites.all { id -> completedIds.contains(id) } }
+            .sortedBy { obj -> obj.difficulty }
+            .take(3)
+
+        val adaptations = if (style ~= "visual learner") {
+            listOf("Include diagrams and visual aids", "Use color-coded explanations")
+        } else {
+            listOf("Provide step-by-step written explanations", "Include practice problems")
+        }
+
+        return LessonPlan(
+            objectives = nextObjectives,
+            estimatedDuration = nextObjectives.size * 15.0,
+            adaptations = adaptations,
+            rationale = "Based on ${student.name}'s learning profile and current progress"
+        )
+    }
+
+    intent fun conductExercise(objective: LearningObjective): AssessmentResult {
+        ensure { result.score @ (>0.0) }
+        prefer { result.timeSpent < 600.0 }
+        avoid  { result.mistakes.size > 5 }
+
+        val exercise = generateExercise(objective, objective.difficulty)
+        val response = ask("Please solve: ${exercise}")
+        val result = evaluateResponse(response, exercise)
+
+        // If the student is struggling, provide a hint and retry
+        if (result.score @ (<0.5)) {
+            val hint = generateHint(objective, result.mistakes)
+            val retry = ask("Here is a hint: ${hint}. Try again.")
+            val retryResult = evaluateResponse(retry, exercise)
+            return retryResult
+        }
+
+        context.lessonsDelivered++
+        return result
+
+        adapt<StudentFrustrated> {
+            log("Student frustration detected, switching to easier material")
+            val easier = objective.copy(difficulty = objective.difficulty - 1)
+            conductExercise(easier)
+        }
+
+        adapt<TimeExpired> {
+            log("Session time expired, saving progress")
+            emit(SessionTimeout(studentId = student.id, objectiveId = objective.id))
+        }
+    }
+
+    on<AssessmentCompleted> { event ->
+        context.avgSessionScore = (context.avgSessionScore * context.lessonsDelivered + event.score) / (context.lessonsDelivered + 1)
+    }
+}
+
+
+// ======================== Feature Specs ==========================
+
+feature("Personalized Tutoring") {
+
+    spec("lesson plan respects prerequisites") {
+        given {
+            val student = Student(
+                id = testId(),
+                name = "Alex",
+                gradeLevel = 5,
+                subjects = listOf("math", "science"),
+                enrolledAt = now()
+            )
+        }
+        whenever {
+            val plan = tutor.planLesson()
+        }
+        then {
+            plan.objectives.all { obj ->
+                obj.prerequisites.all { id -> isCompleted(id) }
+            } shouldBe true
+        }
+    }
+
+    spec("adapts to student learning style") {
+        given {
+            val style = recall("learning style")
+        }
+        whenever {
+            val plan = tutor.planLesson()
+        }
+        then {
+            plan.adaptations.size shouldBeGreaterThan 0
+            plan.rationale.length shouldBeGreaterThan 0
+        }
+    }
+}

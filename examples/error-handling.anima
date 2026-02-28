@@ -1,0 +1,209 @@
+// error-handling.anima
+// A payment processing system demonstrating robust error handling with
+// try/catch, diagnosable classes, adapt clauses, and fallback strategies.
+
+module PaymentProcessing
+
+import { HttpClient, Request, Response } from "anima/http"
+import { Logger } from "anima/logging"
+import { Retry, CircuitBreaker } from "anima/resilience"
+
+
+// ======================== Domain Entities ========================
+
+data entity Payment(
+    val id: ID,
+    val amount: Float,
+    val currency: String,
+    val merchantId: ID,
+    val customerId: ID,
+    val method: PaymentMethod,
+    val createdAt: DateTime = now()
+) {
+    invariant { amount > 0.0 }
+    invariant { currency.length == 3 }
+}
+
+sealed class PaymentMethod {
+    data class CreditCard(
+        val token: String,
+        val last4: String,
+        val expiryMonth: Int,
+        val expiryYear: Int
+    ) : PaymentMethod()
+    data class BankTransfer(
+        val routingNumber: String,
+        val accountToken: String
+    ) : PaymentMethod()
+    object Wallet : PaymentMethod()
+}
+
+sealed class PaymentResult {
+    data class Success(val transactionId: ID, val receipt: NL) : PaymentResult()
+    data class Declined(val reason: NL, val retryable: Boolean) : PaymentResult()
+    data class PendingReview(val reviewId: ID, val reason: NL) : PaymentResult()
+}
+
+
+// ======================== Diagnosable Errors =====================
+
+diagnosable class GatewayTimeout(
+    val gatewayId: ID,
+    val requestDuration: Float
+) : PaymentError() {
+
+    diagnose {
+        check { gatewayHealthCheck(gatewayId) }
+            yields "Gateway health: ${healthStatus(gatewayId)}"
+
+        check { networkLatency(gatewayId) }
+            yields "Network latency: ${latency(gatewayId)}ms"
+
+        check { gatewayQueueDepth(gatewayId) }
+            yields "Queue depth: ${queueDepth(gatewayId)} pending requests"
+
+        check { gatewayCircuitState(gatewayId) }
+            yields "Circuit breaker: ${circuitState(gatewayId)}"
+    }
+
+    suggest {
+        "Retry with exponential backoff (max 3 attempts)"
+        "Switch to fallback gateway if primary is degraded"
+        "Check gateway status page: https://status.gateway.example.com"
+    }
+
+    autoFix(requiresApproval = false) {
+        attempt { retryWithBackoff(gatewayId, maxAttempts = 3) }
+        attempt { switchToFallbackGateway(gatewayId) }
+        verify { gatewayResponds(gatewayId) }
+    }
+}
+
+diagnosable class FraudSuspicion(
+    val paymentId: ID,
+    val riskScore: Float @ Confidence
+) : PaymentError() {
+
+    diagnose {
+        check { customerHistory(paymentId) }
+            yields "Customer risk profile: ${riskProfile(paymentId)}"
+
+        check { velocityCheck(paymentId) }
+            yields "Transaction velocity: ${velocityScore(paymentId)}"
+
+        check { geolocationCheck(paymentId) }
+            yields "Location anomaly: ${locationScore(paymentId)}"
+    }
+
+    suggest {
+        "Escalate to fraud review team for manual verification"
+        "Request additional authentication from customer"
+        "Temporarily hold funds pending investigation"
+    }
+}
+
+
+// ======================== Payment Processor Agent =================
+
+agent PaymentProcessor(
+    private val primaryGateway: ID,
+    private val fallbackGateway: ID
+) {
+    context {
+        var processedToday: Int = 0
+        var failureRate: Float = 0.0
+        val recentErrors: MutableList<PaymentError> = mutableListOf()
+    }
+
+    tools {
+        fun chargeCard(gateway: ID, payment: Payment): PaymentResult
+        fun initiateTransfer(gateway: ID, payment: Payment): PaymentResult
+        fun checkFraudScore(payment: Payment): Float @ Confidence
+        fun holdFunds(paymentId: ID): Result<Unit>
+    }
+
+    boundaries {
+        maxCost = 0.05.dollars per transaction
+        maxTime = 30.seconds
+
+        can { chargeCards; initiateTransfers; checkFraud }
+        cannot { issueRefunds; modifyAccounts; accessRawCardNumbers }
+        requiresApproval { chargeCards where { payment.amount > 10000.0 } }
+    }
+
+    intent fun processPayment(payment: Payment): PaymentResult {
+        ensure { result is PaymentResult }
+        ensure { payment.amount > 0.0 }
+        prefer { result is PaymentResult.Success }
+        avoid  { duplicateCharge(payment) }
+
+        // Check for fraud before processing
+        val fraudScore = checkFraudScore(payment)
+        if (fraudScore @ (>0.8)) {
+            hint("high fraud risk detected, consider blocking")
+        }
+
+        // Attempt to process with error handling
+        val result = try {
+            when (payment.method) {
+                is PaymentMethod.CreditCard -> {
+                    chargeCard(primaryGateway, payment)
+                }
+                is PaymentMethod.BankTransfer -> {
+                    initiateTransfer(primaryGateway, payment)
+                }
+                else -> {
+                    chargeCard(primaryGateway, payment)
+                }
+            }
+        } catch (e: GatewayTimeout) {
+            val diagnosis = e.diagnose()
+            log("Primary gateway timeout: ${diagnosis.summary}")
+            // Try fallback gateway
+            try {
+                chargeCard(fallbackGateway, payment)
+            } catch (e2: GatewayTimeout) {
+                log("Fallback gateway also timed out")
+                PaymentResult.PendingReview(
+                    reviewId = generateId(),
+                    reason = "Both gateways unavailable, queued for retry"
+                )
+            }
+        } catch (e: FraudSuspicion) {
+            val diagnosis = e.diagnose()
+            holdFunds(payment.id)
+            PaymentResult.PendingReview(
+                reviewId = generateId(),
+                reason = diagnosis.summary
+            )
+        }
+
+        context.processedToday++
+        return result
+
+        // If the fraud detection system itself is down, process cautiously
+        adapt<FraudServiceUnavailable> {
+            log("Fraud service down, applying conservative limits")
+            if (payment.amount > 500.0) {
+                PaymentResult.PendingReview(
+                    reviewId = generateId(),
+                    reason = "Fraud service unavailable, held for manual review"
+                )
+            }
+        }
+
+        fallback {
+            log("All processing paths failed")
+            PaymentResult.Declined(
+                reason = "Unable to process payment at this time",
+                retryable = true
+            )
+        }
+    }
+
+    on<PaymentDisputed> { event ->
+        val payment = lookupPayment(event.paymentId)
+        context.recentErrors.add(DisputeError(event.paymentId))
+        context.failureRate = context.recentErrors.size.toFloat() / context.processedToday
+    }
+}

@@ -1,0 +1,362 @@
+// evolving-strategies.anima
+// An adaptive pricing engine that evolves its pricing strategy over time,
+// demonstrating evolving intent functions, strategy blocks, evolve blocks
+// with fitness metrics, triggerWhen/rollbackWhen, and review rules.
+
+module AdaptivePricing
+
+import { NL } from "anima/core"
+import { Logger } from "anima/logging"
+import { HttpClient } from "anima/http"
+import { similarity } from "anima/ml"
+
+
+// ======================== Domain Entities ========================
+
+data entity Product(
+    val id: ID,
+    val name: String,
+    val category: String,
+    val baseCost: Float,
+    val inventoryLevel: Int,
+    val elasticity: Float @ Confidence
+) {
+    invariant { baseCost > 0.0 }
+    invariant { inventoryLevel >= 0 }
+}
+
+data entity PricingContext(
+    val timestamp: DateTime,
+    val demandSignal: Float @ Confidence,
+    val competitorPrice: Float @ Confidence,
+    val seasonality: Float,
+    val customerSegment: String,
+    val dayOfWeek: Int
+)
+
+data entity PriceQuote(
+    val productId: ID,
+    val recommendedPrice: Float,
+    val margin: Float,
+    val rationale: NL,
+    val confidence: Float @ Confidence
+) {
+    invariant { recommendedPrice > 0.0 }
+    invariant { margin >= 0.0 }
+}
+
+data entity PricingOutcome(
+    val quoteId: ID,
+    val productId: ID,
+    val quotedPrice: Float,
+    val actualSold: Boolean,
+    val timeToSale: Float,
+    val customerSatisfaction: Float @ Confidence,
+    val recordedAt: DateTime = now()
+)
+
+
+// ======================== Shared Resource ========================
+
+shared resource PricingHistory(
+    val capacity: Int = 10000,
+    val conflictStrategy: ConflictStrategy = SemanticMerge
+) {
+    accessPolicy {
+        priority = byRecency()
+        fairness = noStarvationBeyond(2.seconds)
+        onConflict { mine, theirs ->
+            when {
+                mine.timestamp > theirs.timestamp -> mine
+                else -> merge(mine, theirs)
+            }
+        }
+    }
+}
+
+
+// ======================== Context ================================
+
+context PricingMemory {
+    persistent {
+        val historicalOutcomes: List<PricingOutcome> by stored()
+        val seasonalPatterns: Map<String, Float> by stored()
+        var baselineMargin: Float by stored()
+        var evolutionGeneration: Int by stored()
+    }
+
+    session {
+        var quotesGenerated: Int = 0
+        var conversionRate: Float = 0.0
+    }
+
+    autoLearn {
+        rule("seasonal adjustment") {
+            whenever { historicalOutcomes.samePeriodCount() >= 30 }
+            store {
+                SeasonalPattern(
+                    period = currentPeriod(),
+                    adjustment = computeSeasonalFactor(historicalOutcomes),
+                    confidence = historicalOutcomes.consistency()
+                )
+            }
+        }
+
+        rule("elasticity refinement") {
+            whenever { outcomesForProduct.size >= 50 }
+            store {
+                ElasticityUpdate(
+                    productId = currentProduct.id,
+                    elasticity = computeElasticity(outcomesForProduct),
+                    sampleSize = outcomesForProduct.size
+                )
+            }
+        }
+    }
+
+    decay {
+        rate = 0.005 per day
+        floor = 0.2
+        refreshOn = Access
+    }
+}
+
+
+// ======================== Fuzzy Predicates ========================
+
+fuzzy fun Product.isDemandSensitive(): Boolean {
+    factors {
+        elasticity @ (>0.7)                   weight 0.3
+        inventoryLevel < 50                    weight 0.2
+        category ~= "seasonal goods"           weight 0.25
+        historicalVariance(this) > 0.3         weight 0.25
+    }
+}
+
+fuzzy fun PriceQuote.isCompetitive(market: PricingContext): Boolean {
+    factors {
+        recommendedPrice <= market.competitorPrice.unwrap() * 1.05     weight 0.4
+        margin >= 0.15                                                  weight 0.3
+        confidence @ (>0.7)                                             weight 0.3
+    }
+}
+
+
+// ======================== Pricing Agent ===========================
+
+agent PricingEngine(
+    private val minMargin: Float = 0.10,
+    private val maxMarkup: Float = 3.0
+) {
+    context {
+        var totalQuotes: Int = 0
+        var avgMargin: Float = 0.0
+        val recentOutcomes: MutableList<PricingOutcome> = mutableListOf()
+    }
+
+    tools {
+        fun fetchCompetitorPrice(productId: ID): Float @ Confidence
+        fun estimateDemand(productId: ID, context: PricingContext): Float @ Confidence
+        fun getHistoricalPricing(productId: ID, days: Int): List<PricingOutcome>
+        fun calculateOptimalPrice(product: Product, demand: Float, competitor: Float): Float
+    }
+
+    boundaries {
+        maxCost = 0.02.dollars per quote
+        maxTime = 2.seconds
+
+        can { readProductData; readCompetitorPrices; readHistory }
+        cannot { modifyInventory; modifyBaseCost; overrideMinMargin }
+    }
+
+    // The core pricing function that evolves over time
+    evolving intent fun generateQuote(product: Product, ctx: PricingContext): PriceQuote {
+        ensure { output.recommendedPrice >= product.baseCost * (1.0 + minMargin) }
+        ensure { output.recommendedPrice <= product.baseCost * maxMarkup }
+        ensure { output.margin >= minMargin }
+        prefer { output.isCompetitive(ctx) }
+        prefer { output.confidence @ (>0.7) }
+        avoid  { output.recommendedPrice > ctx.competitorPrice.unwrap() * 1.5 }
+        avoid  { output.margin > 0.80 }
+
+        strategy {
+            val demand = estimateDemand(product.id, ctx)
+            val competitor = fetchCompetitorPrice(product.id)
+            val historical = getHistoricalPricing(product.id, 30)
+
+            // Base price from cost-plus
+            val costPlus = product.baseCost * (1.0 + minMargin)
+
+            // Demand adjustment
+            val demandMultiplier = if (demand @ (>0.7)) {
+                1.0 + (demand.unwrap() * 0.3)
+            } else {
+                1.0
+            }
+
+            // Competitive adjustment
+            val competitivePrice = if (competitor @ (>0.6)) {
+                competitor.unwrap() * 0.98
+            } else {
+                costPlus * 1.2
+            }
+
+            // Seasonal adjustment from memory
+            val seasonalFactor = recall("seasonal pattern for ${ctx.timestamp.month}")
+            val adjustedPrice = costPlus * demandMultiplier * ctx.seasonality
+
+            // Blend strategies
+            val finalPrice = (adjustedPrice * 0.4 + competitivePrice * 0.4 + costPlus * 0.2)
+            val clampedPrice = finalPrice.coerceIn(
+                product.baseCost * (1.0 + minMargin),
+                product.baseCost * maxMarkup
+            )
+
+            val margin = (clampedPrice - product.baseCost) / clampedPrice
+
+            PriceQuote(
+                productId = product.id,
+                recommendedPrice = clampedPrice,
+                margin = margin,
+                rationale = "Blended cost-plus, demand, and competitive signals",
+                confidence = demand
+            )
+        }
+
+        evolve {
+            fitness {
+                conversionRate       weight 0.30
+                marginPerSale        weight 0.25
+                revenueGrowth        weight 0.20
+                customerRetention    weight 0.15
+                competitivePosition  weight 0.10
+            }
+
+            allow {
+                modifyDemandWeighting()
+                modifyCompetitiveWeighting()
+                addSignals(from = listOf(ctx.customerSegment, ctx.dayOfWeek))
+                adjustSeasonalFactors()
+                changeBlendingRatios(range = 0.1..0.6)
+            }
+
+            forbid {
+                reduceMarginsBelow(minMargin)
+                exceedMaxMarkup(maxMarkup)
+                useCustomerPersonalData()
+                implementPriceSurging(multiplier = 2.0)
+                colludeWithCompetitorPricing()
+            }
+
+            triggerWhen { fitness.score < 0.5 lasting 14.days }
+            rollbackWhen { fitness.score < previousVersion.score * 0.85 }
+
+            review {
+                autoApproveIf { changeScope == ChangeScope.MINOR }
+                humanApproveIf { changeScope == ChangeScope.MAJOR }
+            }
+        }
+    }
+
+    // Non-evolving intent for bulk pricing
+    intent fun generateBulkQuotes(products: List<Product>, ctx: PricingContext): List<PriceQuote> {
+        ensure { output.size == products.size }
+        ensure { output.all { it.margin >= minMargin } }
+        prefer { output.all { it.isCompetitive(ctx) } }
+        avoid  { output.any { it.confidence @ (<0.5) } }
+
+        val quotes = products.map { product ->
+            generateQuote(product, ctx)
+        }
+
+        context.totalQuotes = context.totalQuotes + quotes.size
+        return quotes
+
+        adapt<CompetitorDataUnavailable> {
+            log("Competitor data unavailable, using cost-plus fallback")
+            products.map { product ->
+                PriceQuote(
+                    productId = product.id,
+                    recommendedPrice = product.baseCost * 1.3,
+                    margin = 0.23,
+                    rationale = "Cost-plus fallback: competitor data unavailable",
+                    confidence = 0.4 @ 0.8
+                )
+            }
+        }
+    }
+
+    on<SaleCompleted> { event ->
+        val outcome = PricingOutcome(
+            quoteId = event.quoteId,
+            productId = event.productId,
+            quotedPrice = event.price,
+            actualSold = true,
+            timeToSale = event.timeToSale,
+            customerSatisfaction = event.satisfaction
+        )
+        context.recentOutcomes.add(outcome)
+        context.avgMargin = context.recentOutcomes.map { it.quotedPrice }.average()
+    }
+}
+
+
+// ======================== Feature Specs ==========================
+
+feature("Adaptive Pricing") {
+
+    spec("prices stay within margin bounds") {
+        given {
+            val product = Product(
+                id = testId(),
+                name = "Widget A",
+                category = "electronics",
+                baseCost = 100.0,
+                inventoryLevel = 200,
+                elasticity = 0.6 @ 0.8
+            )
+            val ctx = PricingContext(
+                timestamp = now(),
+                demandSignal = 0.7 @ 0.85,
+                competitorPrice = 150.0 @ 0.9,
+                seasonality = 1.0,
+                customerSegment = "retail",
+                dayOfWeek = 3
+            )
+        }
+        whenever {
+            val quote = engine.generateQuote(product, ctx)
+        }
+        then {
+            quote.recommendedPrice shouldBeGreaterThan product.baseCost * 1.10
+            quote.recommendedPrice shouldBeLessThan product.baseCost * 3.0
+            quote.margin shouldBeGreaterThan 0.10
+        }
+    }
+
+    spec("evolution improves conversion over time") {
+        given {
+            val baseline = engine.fitnessScore()
+        }
+        whenever {
+            simulateTrading(days = 30, transactions = 1000)
+        }
+        then {
+            engine.fitnessScore() shouldBeGreaterThan baseline
+            engine.evolutionGeneration() shouldBeGreaterThan 0
+        }
+    }
+
+    spec("rollback triggers on performance degradation") {
+        given {
+            val currentScore = engine.fitnessScore()
+        }
+        whenever {
+            engine.fitnessScore() < currentScore * 0.85
+        }
+        then {
+            engine.evolutionGeneration() shouldBe previousGeneration
+            engine.fitnessScore() shouldBeGreaterThan currentScore * 0.85
+        }
+    }
+}

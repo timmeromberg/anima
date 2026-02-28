@@ -1,0 +1,227 @@
+// type-system.anima
+// A medical diagnosis system demonstrating rich type hierarchies:
+// generic types, union/intersection types, confidence types with thresholds,
+// NL types, type aliases, sealed classes, and interfaces.
+
+module MedicalDiagnosis
+
+import { NL } from "anima/core"
+import { Logger } from "anima/logging"
+
+
+// ======================== Type Aliases ============================
+
+// Type aliases for domain-specific semantics
+type PatientId = ID
+type ICD10Code = String
+type Dosage = Float
+type Probability = Float @ Confidence
+type ClinicalNote = NL
+type LabValue = Float @ Confidence
+type SymptomList = List<Symptom>
+type DrugInteractionMatrix = Map<ICD10Code, List<ICD10Code>>
+
+
+// ======================== Interfaces =============================
+
+interface Diagnosable {
+    val symptoms: SymptomList
+    fun matchesProfile(condition: Condition): Probability
+}
+
+interface Treatable {
+    val contraindicatedDrugs: List<ICD10Code>
+    fun respondsToPrescription(rx: Prescription): Boolean
+}
+
+// A type that is both diagnosable and treatable
+interface ClinicalCase : Diagnosable, Treatable {
+    val patientId: PatientId
+    val history: List<ClinicalEvent>
+    fun riskScore(): Float @ Confidence
+}
+
+
+// ======================== Sealed Hierarchies =====================
+
+sealed class Condition {
+    data class Acute(
+        val code: ICD10Code,
+        val name: String,
+        val severity: Float,
+        val onset: DateTime
+    ) : Condition()
+    data class Chronic(
+        val code: ICD10Code,
+        val name: String,
+        val managementPlan: ClinicalNote,
+        val diagnosedAt: DateTime
+    ) : Condition()
+    data class Suspected(
+        val code: ICD10Code,
+        val name: String,
+        val likelihood: Float @ Confidence
+    ) : Condition()
+    object Unknown : Condition()
+}
+
+sealed class ClinicalEvent {
+    data class Diagnosis(
+        val condition: Condition,
+        val confidence: Float @ Confidence,
+        val diagnosedBy: String
+    ) : ClinicalEvent()
+    data class Prescription(
+        val medication: String,
+        val dosage: Dosage,
+        val frequency: String
+    ) : ClinicalEvent()
+    data class LabResult(
+        val testName: String,
+        val value: LabValue,
+        val referenceRange: String
+    ) : ClinicalEvent()
+    data class Procedure(
+        val name: String,
+        val outcome: ClinicalNote
+    ) : ClinicalEvent()
+}
+
+// Triage urgency with structured subclasses
+sealed class TriageLevel {
+    object Emergent : TriageLevel()
+    object Urgent : TriageLevel()
+    object SemiUrgent : TriageLevel()
+    object NonUrgent : TriageLevel()
+}
+
+
+// ======================== Domain Entities ========================
+
+data entity Symptom(
+    val name: String,
+    val severity: Float,
+    val duration: String,
+    val reported: ClinicalNote
+) {
+    invariant { severity >= 0.0 }
+    invariant { severity <= 10.0 }
+}
+
+data entity Patient(
+    val id: PatientId,
+    val age: Int,
+    val symptoms: SymptomList,
+    val history: List<ClinicalEvent>,
+    val allergies: List<String>,
+    val contraindicatedDrugs: List<ICD10Code> = emptyList()
+) {
+    invariant { age > 0 }
+    invariant { age < 150 }
+}
+
+data entity DiagnosisResult(
+    val patientId: PatientId,
+    val primaryDiagnosis: Condition @ Confidence,
+    val differentials: List<Condition @ Confidence>,
+    val triageLevel: TriageLevel,
+    val recommendedTests: List<String>,
+    val notes: ClinicalNote
+)
+
+data entity Prescription(
+    val medication: String,
+    val dosage: Dosage,
+    val unit: String,
+    val frequency: String,
+    val duration: String
+) {
+    invariant { dosage > 0.0 }
+}
+
+
+// ======================== Generic Functions ======================
+
+// Generic function for filtering by confidence threshold
+fun <T> filterByConfidence(items: List<T @ Confidence>, threshold: Float): List<T> {
+    return items.filter { it.confidence > threshold }.map { it.unwrap() }
+}
+
+// Generic ranking function parameterized on a scoreable type
+fun <T> rankByScore(items: List<T>, scorer: (T) -> Float): List<T> {
+    return items.sortedByDescending { scorer(it) }
+}
+
+
+// ======================== Fuzzy Predicates ========================
+
+fuzzy fun Patient.isHighRisk(): Boolean {
+    factors {
+        age > 65                             weight 0.2
+        history.size > 10                    weight 0.2
+        symptoms.any { it.severity > 7.0 }   weight 0.3
+        allergies.size > 5                   weight 0.15
+        hasChronicConditions(this)            weight 0.15
+    }
+}
+
+fuzzy fun DiagnosisResult.needsImmediateAttention(): Boolean {
+    factors {
+        triageLevel is TriageLevel.Emergent                 weight 0.4
+        primaryDiagnosis @ (>0.9)                           weight 0.2
+        differentials.size < 2                               weight 0.2
+        primaryDiagnosis.unwrap() is Condition.Acute         weight 0.2
+    }
+}
+
+
+// ======================== Diagnosis Agent ========================
+
+agent DiagnosticsEngine {
+    tools {
+        fun lookupCondition(code: ICD10Code): Condition
+        fun checkInteractions(meds: List<Prescription>): DrugInteractionMatrix
+        fun matchSymptoms(symptoms: SymptomList): List<Condition @ Confidence>
+        fun assessTriage(patient: Patient, condition: Condition): TriageLevel
+    }
+
+    boundaries {
+        maxTime = 10.seconds
+        maxCost = 0.20.dollars per diagnosis
+
+        can { readPatientRecords; matchSymptoms; lookupConditions }
+        cannot { prescribeMedication; modifyRecords; contactPatient }
+    }
+
+    intent fun diagnose(patient: Patient): DiagnosisResult {
+        ensure { result.primaryDiagnosis @ (>0.5) }
+        ensure { result.differentials.size >= 1 }
+        prefer { result.primaryDiagnosis @ (>0.8) }
+        prefer { result.recommendedTests.isNotEmpty() }
+        avoid  { result.primaryDiagnosis.unwrap() is Condition.Unknown }
+
+        val matches = matchSymptoms(patient.symptoms)
+        val ranked = rankByScore(matches) { it.confidence }
+
+        val primary = ranked.first()
+        val differentials = ranked.drop(1).take(5)
+        val triage = assessTriage(patient, primary.unwrap())
+
+        return DiagnosisResult(
+            patientId = patient.id,
+            primaryDiagnosis = primary,
+            differentials = differentials,
+            triageLevel = triage,
+            recommendedTests = suggestTests(primary.unwrap()),
+            notes = "Automated diagnosis based on ${patient.symptoms.size} reported symptoms"
+        )
+
+        adapt<InsufficientSymptoms> {
+            ask("Patient ${patient.id} has too few symptoms. Request additional history?")
+        }
+
+        adapt<RareConditionDetected> {
+            hint("rare condition flagged, recommend specialist referral")
+        }
+    }
+}
