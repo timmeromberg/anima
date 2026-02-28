@@ -1,0 +1,21 @@
+fun add(a: Int, b: Int): Int = a + b
+
+fun main() {
+    val x = add(3, 4)
+    println(x)
+
+    val name = "Anima"
+    println("Hello, ${name}!")
+
+    if (x > 5) {
+        println("Big number")
+    } else {
+        println("Small number")
+    }
+
+    for (i in 1..5) {
+        println(i)
+    }
+}
+
+main()
