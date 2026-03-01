@@ -49,6 +49,8 @@ module.exports = grammar({
     [$.function_type, $.parenthesized_type],
     // if expression with bare expressions in branches
     [$._expression, $.if_expression],
+    // entity_declaration: { after ) could be entity_body or top-level block expression
+    [$.entity_declaration],
   ],
 
   rules: {
@@ -81,6 +83,12 @@ module.exports = grammar({
       $.diagnosable_declaration,
       $.val_declaration,
       $.var_declaration,
+      // Statements allowed at top level for scripting and REPL support
+      $.assignment_statement,
+      $.for_statement,
+      $.while_statement,
+      $.return_statement,
+      $.expression_statement,
     ),
 
     // ======================== Imports & Modules =====================

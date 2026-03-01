@@ -388,9 +388,218 @@ describe('Interpreter integration', () => {
               println(i)
           }
       }
-
-      main()
     `);
     expect(output).toBe('7\nHello, Anima!\nBig number\n1\n2\n3\n4\n5\n');
+  });
+
+  conditionalTest('entity creation and field access', () => {
+    const output = runProgram(`
+      data entity Person(
+        val name: String,
+        val age: Int
+      )
+
+      val person = Person("Alice", 30)
+      println(person.name)
+      println(person.age)
+    `);
+    expect(output).toBe('Alice\n30\n');
+  });
+
+  conditionalTest('entity toString', () => {
+    const output = runProgram(`
+      data entity Person(
+        val name: String,
+        val age: Int
+      )
+
+      val person = Person("Alice", 30)
+      println(person.toString())
+    `);
+    expect(output).toBe('Person(name=Alice, age=30)\n');
+  });
+
+  conditionalTest('entity equality', () => {
+    const output = runProgram(`
+      data entity Person(
+        val name: String,
+        val age: Int
+      )
+
+      data entity Pet(
+        val name: String,
+        val age: Int
+      )
+
+      val p1 = Person("Alice", 30)
+      val p2 = Person("Alice", 30)
+      val p3 = Person("Bob", 30)
+      val pet = Pet("Alice", 30)
+
+      println(p1 == p2)
+      println(p1 == p3)
+      println(p1 == pet)
+    `);
+    expect(output).toBe('true\nfalse\nfalse\n');
+  });
+
+  conditionalTest('entity copy with named arguments', () => {
+    const output = runProgram(`
+      data entity Person(
+        val name: String,
+        val age: Int
+      )
+
+      val original = Person("Alice", 30)
+      val updated = original.copy(age = 31)
+
+      println(original.age)
+      println(updated.age)
+      println(updated.name)
+    `);
+    expect(output).toBe('30\n31\nAlice\n');
+  });
+
+  conditionalTest('entity destructuring', () => {
+    const output = runProgram(`
+      data entity Point(
+        val x: Int,
+        val y: Int
+      )
+
+      val (x, y) = Point(3, 4)
+      println(x)
+      println(y)
+    `);
+    expect(output).toBe('3\n4\n');
+  });
+
+  conditionalTest('entity invariant violation', () => {
+    expect(() => runProgram(`
+      data entity Person(
+        val age: Int
+      ) {
+        invariant { age >= 0 }
+      }
+
+      Person(-1)
+    `)).toThrow('Invariant violation in Person');
+  });
+
+  conditionalTest('entity type check with is', () => {
+    const output = runProgram(`
+      data entity Person(
+        val name: String
+      )
+
+      val person = Person("Alice")
+      println(person is Person)
+      println(person is String)
+      println(42 is Int)
+    `);
+    expect(output).toBe('true\nfalse\ntrue\n');
+  });
+
+  conditionalTest('list distinct', () => {
+    const output = runProgram(`
+      val numbers = listOf(1, 2, 2, 3, 1)
+      println(numbers.distinct())
+    `);
+    expect(output).toBe('[1, 2, 3]\n');
+  });
+
+  conditionalTest('list any/all/none with lambda', () => {
+    const output = runProgram(`
+      val numbers = listOf(1, 2, 3, 4)
+      println(numbers.any { it > 3 })
+      println(numbers.all { it > 0 })
+      println(numbers.none { it < 0 })
+    `);
+    expect(output).toBe('true\ntrue\ntrue\n');
+  });
+
+  conditionalTest('list reversed, take, drop', () => {
+    const output = runProgram(`
+      val numbers = listOf(1, 2, 3, 4)
+      println(numbers.reversed())
+      println(numbers.take(2))
+      println(numbers.drop(2))
+    `);
+    expect(output).toBe('[4, 3, 2, 1]\n[1, 2]\n[3, 4]\n');
+  });
+
+  conditionalTest('list find and indexOf', () => {
+    const output = runProgram(`
+      val numbers = listOf(4, 6, 8)
+      println(numbers.find { it > 5 })
+      println(numbers.find { it > 10 })
+      println(numbers.indexOf(8))
+      println(numbers.indexOf(7))
+    `);
+    expect(output).toBe('6\nnull\n2\n-1\n');
+  });
+
+  conditionalTest('list joinToString', () => {
+    const output = runProgram(`
+      val numbers = listOf(1, 2, 3)
+      println(numbers.joinToString(", "))
+    `);
+    expect(output).toBe('1, 2, 3\n');
+  });
+
+  conditionalTest('list zip', () => {
+    const output = runProgram(`
+      val zipped = listOf(1, 2, 3).zip(listOf("a", "b"))
+      println(size(zipped))
+      println(zipped[0][0])
+      println(zipped[0][1])
+      println(zipped[1][0])
+      println(zipped[1][1])
+    `);
+    expect(output).toBe('2\n1\na\n2\nb\n');
+  });
+
+  conditionalTest('map getOrDefault', () => {
+    const output = runProgram(`
+      val values = mapOf("a" to 1)
+      println(values.getOrDefault("a", 99))
+      println(values.getOrDefault("b", 99))
+    `);
+    expect(output).toBe('1\n99\n');
+  });
+
+  conditionalTest('map put and remove (mutable)', () => {
+    const output = runProgram(`
+      val values = mutableMapOf("a" to 1, "b" to 2)
+      values.put("c", 3)
+      println(values["c"])
+      values.remove("a")
+      println(values.getOrDefault("a", 99))
+      println(size(values))
+    `);
+    expect(output).toBe('3\n99\n2\n');
+  });
+
+  conditionalTest('function with expression body', () => {
+    const output = runProgram(`
+      fun foo(x: Int): Int = x * 2
+      println(foo(6))
+    `);
+    expect(output).toBe('12\n');
+  });
+
+  conditionalTest('function with when expression body', () => {
+    const output = runProgram(`
+      fun classify(x: Int): String = when {
+        x > 0 -> "positive"
+        x == 0 -> "zero"
+        else -> "negative"
+      }
+
+      println(classify(2))
+      println(classify(0))
+      println(classify(-3))
+    `);
+    expect(output).toBe('positive\nzero\nnegative\n');
   });
 });
