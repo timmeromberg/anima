@@ -38,6 +38,8 @@ import { requiredField, childrenOfType, childOfType } from './ast';
 
 export class Interpreter {
   private globalEnv: Environment;
+  /** Extension functions keyed by "TypeName.methodName" */
+  private extensionFunctions = new Map<string, AnimaValue>();
 
   constructor() {
     this.globalEnv = new Environment();
@@ -234,6 +236,7 @@ export class Interpreter {
   private evalFunctionDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
     const nameNode = requiredField(node, 'name');
     const name = nameNode.text;
+    const receiverNode = node.childForFieldName('receiver');
 
     const paramsNode = requiredField(node, 'parameters');
     const params = this.extractParams(paramsNode);
@@ -241,7 +244,14 @@ export class Interpreter {
     const bodyNode = requiredField(node, 'body');
 
     const fn = mkFunction(name, params, bodyNode, env);
-    env.defineOrUpdate(name, fn, false);
+
+    if (receiverNode) {
+      // Extension function: fun String.shout() = ...
+      const receiverType = receiverNode.text;
+      this.extensionFunctions.set(`${receiverType}.${name}`, fn);
+    } else {
+      env.defineOrUpdate(name, fn, false);
+    }
     return mkUnit();
   }
 
@@ -910,29 +920,7 @@ export class Interpreter {
         }
       }
 
-      // Execute body
-      try {
-        const body = callee.body;
-        if (body.type === 'block') {
-          return this.evalBlock(body, funcEnv);
-        } else if (body.type === 'lambda_expression') {
-          // Lambda body -- evaluate its statement children directly
-          let result: AnimaValue = mkUnit();
-          for (const child of body.namedChildren) {
-            if (child.type === 'lambda_parameters') continue;
-            result = this.evalNode(child, funcEnv);
-          }
-          return result;
-        } else {
-          // Expression body (fun foo() = expr)
-          return this.evalNode(body, funcEnv);
-        }
-      } catch (e) {
-        if (e instanceof ReturnSignal) {
-          return e.value as AnimaValue;
-        }
-        throw e;
-      }
+      return this.evalFunctionBody(callee.body, funcEnv);
     }
 
     throw new AnimaTypeError(
@@ -940,6 +928,28 @@ export class Interpreter {
       callSite.startPosition.row + 1,
       callSite.startPosition.column,
     );
+  }
+
+  private evalFunctionBody(body: SyntaxNodeRef, env: Environment): AnimaValue {
+    try {
+      if (body.type === 'block') {
+        return this.evalBlock(body, env);
+      } else if (body.type === 'lambda_expression') {
+        let result: AnimaValue = mkUnit();
+        for (const child of body.namedChildren) {
+          if (child.type === 'lambda_parameters') continue;
+          result = this.evalNode(child, env);
+        }
+        return result;
+      } else {
+        return this.evalNode(body, env);
+      }
+    } catch (e) {
+      if (e instanceof ReturnSignal) {
+        return e.value as AnimaValue;
+      }
+      throw e;
+    }
   }
 
   private evalMemberExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
@@ -1180,16 +1190,30 @@ export class Interpreter {
           return mkEntity(obj.typeName, newFields, [...obj.fieldOrder]);
         });
       }
-
-      throw new AnimaRuntimeError(
-        `No member '${name}' on ${obj.typeName}`,
-        node.startPosition.row + 1,
-        node.startPosition.column,
-      );
     }
 
+    // Extension function lookup (works for all types)
+    const extFn = this.lookupExtensionFunction(obj, name);
+    if (extFn && extFn.kind === 'function') {
+      // Return a builtin method that calls the extension function with `this` bound
+      const capturedObj = obj;
+      const capturedExtFn = extFn;
+      return mkBuiltinMethod((args) => {
+        const extEnv = new Environment(capturedExtFn.closure);
+        extEnv.define('this', capturedObj, false);
+        // Bind params
+        for (let i = 0; i < capturedExtFn.params.length; i++) {
+          const p = capturedExtFn.params[i];
+          const val = i < args.length ? args[i] : (p.defaultValue ? this.evalNode(p.defaultValue, extEnv) : mkNull());
+          extEnv.define(p.name, val, false);
+        }
+        return this.evalFunctionBody(capturedExtFn.body, extEnv);
+      });
+    }
+
+    const typeName = obj.kind === 'entity' ? obj.typeName : obj.kind;
     throw new AnimaRuntimeError(
-      `No member '${name}' on ${obj.kind}`,
+      `No member '${name}' on ${typeName}`,
       node.startPosition.row + 1,
       node.startPosition.column,
     );
@@ -1540,6 +1564,45 @@ export class Interpreter {
     }
 
     return mkEntity(entityType.typeName, fields, fieldOrder);
+  }
+
+  // ==================================================================
+  // Extension function support
+  // ==================================================================
+
+  /** Map a runtime value kind to the type name used in extension function receivers */
+  private valueTypeName(v: AnimaValue): string {
+    switch (v.kind) {
+      case 'int': return 'Int';
+      case 'float': return 'Float';
+      case 'string': return 'String';
+      case 'bool': return 'Boolean';
+      case 'list': return 'List';
+      case 'map': return 'Map';
+      case 'entity': return v.typeName;
+      default: return v.kind;
+    }
+  }
+
+  /** Look up an extension function for the given object and method name */
+  private lookupExtensionFunction(obj: AnimaValue, name: string): AnimaValue | null {
+    // Try exact type name first
+    const typeName = this.valueTypeName(obj);
+    const key = `${typeName}.${name}`;
+    const fn = this.extensionFunctions.get(key);
+    if (fn) return fn;
+
+    // For entities, also check sealed parent
+    if (obj.kind === 'entity') {
+      const entityType = this.globalEnv.get(obj.typeName);
+      if (entityType.kind === 'entity_type' && (entityType as any).sealedParent) {
+        const parentKey = `${(entityType as any).sealedParent}.${name}`;
+        const parentFn = this.extensionFunctions.get(parentKey);
+        if (parentFn) return parentFn;
+      }
+    }
+
+    return null;
   }
 
   // ==================================================================

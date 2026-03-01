@@ -602,4 +602,37 @@ describe('Interpreter integration', () => {
     `);
     expect(output).toBe('positive\nzero\nnegative\n');
   });
+
+  conditionalTest('extension function on String', () => {
+    const output = runProgram(`
+      fun String.shout(): String = this.uppercase()
+
+      println("hello".shout())
+    `);
+    expect(output).toBe('HELLO\n');
+  });
+
+  conditionalTest('extension function with parameters', () => {
+    const output = runProgram(`
+      fun Int.add(other: Int): Int = this + other
+
+      println(3.add(4))
+    `);
+    expect(output).toBe('7\n');
+  });
+
+  conditionalTest('extension function on entity', () => {
+    const output = runProgram(`
+      data entity Person(
+        val name: String,
+        val age: Int
+      )
+
+      fun Person.greet(): String = "Hello, " + this.name
+
+      val p = Person("Alice", 30)
+      println(p.greet())
+    `);
+    expect(output).toBe('Hello, Alice\n');
+  });
 });
