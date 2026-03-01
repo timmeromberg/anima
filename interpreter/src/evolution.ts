@@ -74,8 +74,12 @@ export class EvolutionEngine {
 
   /** Record a fitness observation for an evolving construct. */
   recordFitness(name: string, metrics: Map<string, number>): void {
-    const record = this.records.get(name);
-    if (!record) return;
+    let record = this.records.get(name);
+    if (!record) {
+      // Auto-register if not already tracked
+      this.register(name, '');
+      record = this.records.get(name)!;
+    }
 
     // Compute overall fitness as weighted average of metrics
     let total = 0;
@@ -134,6 +138,14 @@ export class EvolutionEngine {
     const record = this.records.get(name);
     if (record) {
       record.active = false;
+    }
+  }
+
+  /** Unpin an evolution record, re-enabling evolution. */
+  unpin(name: string): void {
+    const record = this.records.get(name);
+    if (record) {
+      record.active = true;
     }
   }
 
@@ -229,5 +241,32 @@ export function registerEvolutionBuiltins(env: Environment): void {
     entries.set('fitness', mkFloat(globalEngine.getFitness(record.name)));
     entries.set('historySize', mkInt(record.fitnessHistory.length));
     return mkMap(entries);
+  }), false);
+
+  // Friendly aliases
+  env.define('pin', mkBuiltin('pin', (args: AnimaValue[]) => {
+    if (args.length < 1 || args[0].kind !== 'string') throw new Error('pin(name: String) expected');
+    globalEngine.pin(args[0].value);
+    return mkUnit();
+  }), false);
+
+  env.define('unpin', mkBuiltin('unpin', (args: AnimaValue[]) => {
+    if (args.length < 1 || args[0].kind !== 'string') throw new Error('unpin(name: String) expected');
+    globalEngine.unpin(args[0].value);
+    return mkUnit();
+  }), false);
+
+  env.define('trackFitness', mkBuiltin('trackFitness', (args: AnimaValue[]) => {
+    if (args.length < 2 || args[0].kind !== 'string') throw new Error('trackFitness(name: String, score: Float) expected');
+    const score = args[1].kind === 'int' || args[1].kind === 'float' ? args[1].value : 0;
+    const metrics = new Map<string, number>();
+    metrics.set('score', score);
+    globalEngine.recordFitness(args[0].value, metrics);
+    return mkUnit();
+  }), false);
+
+  env.define('getFitness', mkBuiltin('getFitness', (args: AnimaValue[]) => {
+    if (args.length < 1 || args[0].kind !== 'string') throw new Error('getFitness(name: String) expected');
+    return mkFloat(globalEngine.getFitness(args[0].value));
   }), false);
 }
