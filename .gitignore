@@ -15,9 +15,8 @@ Thumbs.db
 /out/
 /target/
 
-# Node (for tree-sitter tooling, future)
+# Node
 node_modules/
-package-lock.json
 
 # Rust (for compiler, future)
 /Cargo.lock
