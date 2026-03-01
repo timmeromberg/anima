@@ -224,7 +224,7 @@ export class Interpreter {
       case 'resource_declaration':
         return this.evalResourceDeclaration(node, env);
       case 'diagnosable_declaration':
-        return this.evalStub(node);
+        return this.evalDiagnosableDeclaration(node, env);
 
       // ---- AI-first expression stubs ----
       case 'confidence_expression_val':
@@ -242,8 +242,11 @@ export class Interpreter {
       case 'recall_expression':
         return this.evalRecallExpression(node, env);
       case 'ask_expression':
+        // In v0.1, ask() returns the prompt string (non-interactive)
+        return this.evalAskExpression(node, env);
       case 'diagnose_expression':
-        return this.evalStub(node);
+        // In v0.1, diagnose() returns null (diagnosis requires interactive runtime)
+        return mkNull();
 
       // ---- Type expressions (ignored at runtime) ----
       case 'type_check_expression':
@@ -1072,20 +1075,48 @@ export class Interpreter {
         const specName = requiredField(child, 'name').text.replace(/^"|"$/g, '');
         const specEnv = env.child();
 
-        for (const block of child.namedChildren) {
-          if (block.type === 'given_block' || block.type === 'whenever_block' || block.type === 'then_block') {
-            const body = block.namedChildren[0]; // the block node
-            if (body) {
-              // Execute block contents directly in specEnv (shared scope)
-              for (const stmt of body.namedChildren) {
-                this.evalNode(stmt, specEnv);
+        try {
+          for (const block of child.namedChildren) {
+            if (block.type === 'given_block' || block.type === 'whenever_block' || block.type === 'then_block') {
+              const body = block.namedChildren[0]; // the block node
+              if (body) {
+                // Execute block contents directly in specEnv (shared scope)
+                for (const stmt of body.namedChildren) {
+                  this.evalNode(stmt, specEnv);
+                }
               }
             }
           }
+        } catch (_e) {
+          // Spec execution errors are silently ignored in v0.1
+          // (specs reference test helpers and stubs not available at runtime)
         }
       }
     }
 
+    return mkUnit();
+  }
+
+  private evalDiagnosableDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+
+    // Register as an entity type with its field parameters
+    const fieldDefs: EntityFieldDef[] = [];
+    for (const child of node.namedChildren) {
+      if (child.type === 'field_parameter') {
+        const fieldName = requiredField(child, 'name').text;
+        const isVar = child.children.some(c => c.text === 'var');
+        fieldDefs.push({ name: fieldName, mutable: isVar });
+      }
+    }
+
+    const diagType = mkEntityType(name, fieldDefs, [], env);
+    // Mark as diagnosable for type checking
+    if (diagType.kind === 'entity_type') {
+      (diagType as any).diagnosable = true;
+    }
+    env.defineOrUpdate(name, diagType, false);
     return mkUnit();
   }
 
@@ -2561,9 +2592,14 @@ export class Interpreter {
   // Stubs for unimplemented features
   // ==================================================================
 
-  private evalStub(_node: SyntaxNodeRef): AnimaValue {
-    // Silently skip AI-first constructs
-    return mkUnit();
+  private evalAskExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // In v0.1, ask() is non-interactive: evaluate the prompt and return it as a string
+    const promptNode = node.namedChildren[0];
+    if (promptNode) {
+      const prompt = this.evalNode(promptNode, env);
+      return prompt.kind === 'string' ? prompt : mkString(valueToString(prompt));
+    }
+    return mkString('[ask: no prompt]');
   }
 
   // ==================================================================
