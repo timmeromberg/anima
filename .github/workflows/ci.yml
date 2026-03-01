@@ -70,10 +70,42 @@ jobs:
         working-directory: interpreter
         run: npm ci
 
-      - name: Typecheck
+      - name: Typecheck interpreter
         working-directory: interpreter
         run: npx tsc --noEmit
 
-      - name: Run tests
+      - name: Run interpreter tests
         working-directory: interpreter
+        run: npx jest
+
+  typechecker:
+    name: Type Checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: typechecker/package-lock.json
+
+      - name: Build tree-sitter-anima native module
+        working-directory: tree-sitter-anima
+        run: |
+          npm ci
+          npx tree-sitter generate
+          npx tree-sitter init --update
+          npx node-gyp configure && npx node-gyp build
+
+      - name: Install typechecker dependencies
+        working-directory: typechecker
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: typechecker
+        run: npx tsc --noEmit
+
+      - name: Run typechecker tests
+        working-directory: typechecker
         run: npx jest
