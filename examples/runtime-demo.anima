@@ -155,6 +155,66 @@ fun main() {
     val display = name ?: "Anonymous"
     println("Elvis: " + display)
 
+    // Break and continue
+    var breakSum = 0
+    for (i in 1..10) {
+        if (i > 5) break
+        if (i % 2 == 0) continue
+        breakSum = breakSum + i
+    }
+    println("Odd sum 1-5: " + breakSum.toString())
+
+    // Try-catch-finally
+    var tcf = ""
+    try {
+        tcf = "try"
+    } catch (e: Exception) {
+        tcf = "catch"
+    } finally {
+        tcf = tcf + "+finally"
+    }
+    println("TCF: " + tcf)
+
+    // Closures
+    fun makeMultiplier(n: Int): (Int) -> Int = { x: Int -> x * n }
+    val triple = makeMultiplier(3)
+    println("Closure triple(7): " + triple(7).toString())
+
+    // Nested functions
+    fun outer(x: Int): Int {
+        fun square(n: Int): Int = n * n
+        return square(x) + 1
+    }
+    println("Nested fn outer(4): " + outer(4).toString())
+
+    // Reduce and fold
+    val total = nums.reduce { acc: Int, x: Int -> acc + x }
+    println("Reduce sum: " + total.toString())
+    val product = nums.fold(1) { acc: Int, x: Int -> acc * x }
+    println("Fold product: " + product.toString())
+
+    // Collection pipeline
+    val pipeline = listOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+        .filter { it % 2 == 0 }
+        .map { it * it }
+        .joinToString(", ")
+    println("Even squares: " + pipeline)
+
+    // Memory
+    remember("demo-key", "Anima rocks")
+    val recalled = recall("demo-key")
+    println("Memory recall: " + recalled[0]["value"].toString())
+    forget("demo-key")
+
+    // NL operations
+    val text = "Alice met Bob in Paris on Monday"
+    println("NL entities: " + text.entities.toString())
+
+    // String interpolation
+    val lang = "Anima"
+    val ver = "0.1"
+    println("Running ${lang} v${ver}")
+
     println("")
     println("=== All features working! ===")
 }
