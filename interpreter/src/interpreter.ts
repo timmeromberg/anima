@@ -17,6 +17,7 @@ import {
   mkNull,
   mkUnit,
   mkList,
+  mkMap,
   mkFunction,
   mkEntity,
   mkEntityType,
@@ -941,6 +942,83 @@ export class Interpreter {
         case 'forEach': return mkBuiltinMethod((args) => {
           return this.listForEach(obj, args[0], node);
         });
+        case 'sortedBy': return mkBuiltinMethod((args) => {
+          return this.listSortedBy(obj, args[0], node);
+        });
+        case 'flatMap': return mkBuiltinMethod((args) => {
+          return this.listFlatMap(obj, args[0], node);
+        });
+        case 'reduce': return mkBuiltinMethod((args) => {
+          return this.listReduce(obj, args[0], args[1], node);
+        });
+        case 'fold': return mkBuiltinMethod((args) => {
+          return this.listReduce(obj, args[0], args[1], node);
+        });
+        case 'any': return mkBuiltinMethod((args) => {
+          return this.listAny(obj, args[0], node);
+        });
+        case 'all': return mkBuiltinMethod((args) => {
+          return this.listAll(obj, args[0], node);
+        });
+        case 'none': return mkBuiltinMethod((args) => {
+          return this.listNone(obj, args[0], node);
+        });
+        case 'distinct': return mkBuiltinMethod(() => {
+          const distinctElements: AnimaValue[] = [];
+          for (const el of obj.elements) {
+            if (!distinctElements.some(existing => valuesEqual(existing, el))) {
+              distinctElements.push(el);
+            }
+          }
+          return mkList(distinctElements);
+        });
+        case 'joinToString': return mkBuiltinMethod((args) => {
+          const separator = args.length > 0 ? args[0] : mkString(',');
+          if (separator.kind !== 'string') throw new AnimaTypeError('joinToString() expects a String separator');
+          return mkString(obj.elements.map(valueToString).join(separator.value));
+        });
+        case 'find': return mkBuiltinMethod((args) => {
+          return this.listFind(obj, args[0], node);
+        });
+        case 'indexOf': return mkBuiltinMethod((args) => {
+          for (let i = 0; i < obj.elements.length; i++) {
+            if (valuesEqual(obj.elements[i], args[0])) {
+              return mkInt(i);
+            }
+          }
+          return mkInt(-1);
+        });
+        case 'count': return mkBuiltinMethod((args) => {
+          if (args.length === 0) return mkInt(obj.elements.length);
+          if (args.length === 1) return this.listCountBy(obj, args[0], node);
+          throw new AnimaRuntimeError('count() takes at most 1 argument');
+        });
+        case 'reversed': return mkBuiltinMethod(() => {
+          return mkList([...obj.elements].reverse());
+        });
+        case 'zip': return mkBuiltinMethod((args) => {
+          const other = args[0];
+          if (other.kind !== 'list') throw new AnimaTypeError('zip() expects a List');
+          const len = Math.min(obj.elements.length, other.elements.length);
+          const zipped: AnimaValue[] = [];
+          for (let i = 0; i < len; i++) {
+            zipped.push(mkList([obj.elements[i], other.elements[i]]));
+          }
+          return mkList(zipped);
+        });
+        case 'take': return mkBuiltinMethod((args) => {
+          if (args[0].kind !== 'int') throw new AnimaTypeError('take() expects an Int');
+          const n = Math.max(0, args[0].value);
+          return mkList(obj.elements.slice(0, n));
+        });
+        case 'drop': return mkBuiltinMethod((args) => {
+          if (args[0].kind !== 'int') throw new AnimaTypeError('drop() expects an Int');
+          const n = Math.max(0, args[0].value);
+          return mkList(obj.elements.slice(n));
+        });
+        case 'sumOf': return mkBuiltinMethod((args) => {
+          return this.listSumOf(obj, args[0], node);
+        });
       }
     }
 
@@ -986,6 +1064,32 @@ export class Interpreter {
         case 'containsKey': return mkBuiltinMethod((args) => {
           return mkBool(obj.entries.has(valueToString(args[0])));
         });
+        case 'getOrDefault': return mkBuiltinMethod((args) => {
+          const key = valueToString(args[0]);
+          const value = obj.entries.get(key);
+          return value ?? args[1];
+        });
+        case 'filter': return mkBuiltinMethod((args) => {
+          return this.mapFilter(obj, args[0], node);
+        });
+        case 'map': return mkBuiltinMethod((args) => {
+          return this.mapMapValues(obj, args[0], node);
+        });
+        case 'entries': return this.mapEntriesToList(obj);
+        case 'forEach': return mkBuiltinMethod((args) => {
+          return this.mapForEach(obj, args[0], node);
+        });
+        case 'put': return mkBuiltinMethod((args) => {
+          if (!obj.mutable) throw new AnimaRuntimeError('Cannot modify immutable map');
+          obj.entries.set(valueToString(args[0]), args[1]);
+          return mkUnit();
+        });
+        case 'remove': return mkBuiltinMethod((args) => {
+          if (!obj.mutable) throw new AnimaRuntimeError('Cannot modify immutable map');
+          obj.entries.delete(valueToString(args[0]));
+          return mkUnit();
+        });
+        case 'toList': return mkBuiltinMethod(() => this.mapEntriesToList(obj));
         case 'keys': return mkList(
           Array.from(obj.entries.keys()).map(k => mkString(k)),
         );
@@ -1405,6 +1509,136 @@ export class Interpreter {
       this.callFunction(fn, [el], new Map(), node, this.globalEnv);
     }
     return mkUnit();
+  }
+
+  private listSortedBy(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    const sorted = [...list.elements];
+    sorted.sort((left, right) => {
+      const leftKey = this.callFunction(fn, [left], new Map(), node, this.globalEnv);
+      const rightKey = this.callFunction(fn, [right], new Map(), node, this.globalEnv);
+      return this.compareValues(leftKey, rightKey);
+    });
+    return mkList(sorted);
+  }
+
+  private listFlatMap(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    const result: AnimaValue[] = [];
+    for (const el of list.elements) {
+      const mapped = this.callFunction(fn, [el], new Map(), node, this.globalEnv);
+      if (mapped.kind === 'list') {
+        result.push(...mapped.elements);
+      } else {
+        result.push(mapped);
+      }
+    }
+    return mkList(result);
+  }
+
+  private listReduce(
+    list: Extract<AnimaValue, { kind: 'list' }>,
+    initial: AnimaValue,
+    fn: AnimaValue,
+    node: SyntaxNodeRef,
+  ): AnimaValue {
+    let acc = initial;
+    for (const el of list.elements) {
+      acc = this.callFunction(fn, [acc, el], new Map(), node, this.globalEnv);
+    }
+    return acc;
+  }
+
+  private listAny(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    for (const el of list.elements) {
+      if (isTruthy(this.callFunction(fn, [el], new Map(), node, this.globalEnv))) {
+        return mkBool(true);
+      }
+    }
+    return mkBool(false);
+  }
+
+  private listAll(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    for (const el of list.elements) {
+      if (!isTruthy(this.callFunction(fn, [el], new Map(), node, this.globalEnv))) {
+        return mkBool(false);
+      }
+    }
+    return mkBool(true);
+  }
+
+  private listNone(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    for (const el of list.elements) {
+      if (isTruthy(this.callFunction(fn, [el], new Map(), node, this.globalEnv))) {
+        return mkBool(false);
+      }
+    }
+    return mkBool(true);
+  }
+
+  private listFind(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    for (const el of list.elements) {
+      if (isTruthy(this.callFunction(fn, [el], new Map(), node, this.globalEnv))) {
+        return el;
+      }
+    }
+    return mkNull();
+  }
+
+  private listCountBy(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    let count = 0;
+    for (const el of list.elements) {
+      if (isTruthy(this.callFunction(fn, [el], new Map(), node, this.globalEnv))) {
+        count++;
+      }
+    }
+    return mkInt(count);
+  }
+
+  private listSumOf(list: Extract<AnimaValue, { kind: 'list' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    let sum = 0;
+    let hasFloat = false;
+    for (const el of list.elements) {
+      const extracted = this.callFunction(fn, [el], new Map(), node, this.globalEnv);
+      sum += asNumber(extracted);
+      if (extracted.kind === 'float') {
+        hasFloat = true;
+      }
+    }
+    return hasFloat ? mkFloat(sum) : mkInt(sum);
+  }
+
+  private mapFilter(map: Extract<AnimaValue, { kind: 'map' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    const result = new Map<string, AnimaValue>();
+    for (const [key, value] of map.entries) {
+      const keep = this.callFunction(fn, [mkString(key), value], new Map(), node, this.globalEnv);
+      if (isTruthy(keep)) {
+        result.set(key, value);
+      }
+    }
+    return mkMap(result);
+  }
+
+  private mapMapValues(map: Extract<AnimaValue, { kind: 'map' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    const result = new Map<string, AnimaValue>();
+    for (const [key, value] of map.entries) {
+      result.set(
+        key,
+        this.callFunction(fn, [mkString(key), value], new Map(), node, this.globalEnv),
+      );
+    }
+    return mkMap(result);
+  }
+
+  private mapForEach(map: Extract<AnimaValue, { kind: 'map' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
+    for (const [key, value] of map.entries) {
+      this.callFunction(fn, [mkString(key), value], new Map(), node, this.globalEnv);
+    }
+    return mkUnit();
+  }
+
+  private mapEntriesToList(map: Extract<AnimaValue, { kind: 'map' }>): AnimaValue {
+    return mkList(
+      Array.from(map.entries.entries()).map(([key, value]) => mkList([mkString(key), value])),
+    );
   }
 }
 

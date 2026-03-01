@@ -15,6 +15,7 @@ import {
   mkList,
   mkMap,
   valueToString,
+  valuesEqual,
   asNumber,
 } from './values';
 import { AnimaRuntimeError, AnimaTypeError } from './errors';
@@ -45,6 +46,26 @@ export function registerBuiltins(env: Environment): void {
 
   env.define('mutableListOf', mkBuiltin('mutableListOf', (args: AnimaValue[]): AnimaValue => {
     return mkList([...args], true);
+  }), false);
+
+  env.define('setOf', mkBuiltin('setOf', (args: AnimaValue[]): AnimaValue => {
+    const unique: AnimaValue[] = [];
+    for (const arg of args) {
+      if (!unique.some(existing => valuesEqual(existing, arg))) {
+        unique.push(arg);
+      }
+    }
+    return mkList(unique, false);
+  }), false);
+
+  env.define('mutableSetOf', mkBuiltin('mutableSetOf', (args: AnimaValue[]): AnimaValue => {
+    const unique: AnimaValue[] = [];
+    for (const arg of args) {
+      if (!unique.some(existing => valuesEqual(existing, arg))) {
+        unique.push(arg);
+      }
+    }
+    return mkList(unique, true);
   }), false);
 
   env.define('mapOf', mkBuiltin('mapOf', (args: AnimaValue[]): AnimaValue => {
