@@ -1134,6 +1134,7 @@ module.exports = grammar({
       'try',
       field('body', $.block),
       repeat1($.catch_clause),
+      optional($.finally_clause),
     ),
 
     catch_clause: $ => seq(
@@ -1143,6 +1144,11 @@ module.exports = grammar({
       ':',
       field('type', $._type),
       ')',
+      field('body', $.block),
+    ),
+
+    finally_clause: $ => seq(
+      'finally',
       field('body', $.block),
     ),
 
@@ -1157,6 +1163,7 @@ module.exports = grammar({
       $.return_statement,
       $.for_statement,
       $.while_statement,
+      $.function_declaration,
       $.expression_statement,
     ),
 

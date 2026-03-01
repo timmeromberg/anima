@@ -27,7 +27,7 @@ export type AnimaValue =
   | { kind: 'null' }
   | { kind: 'list'; elements: AnimaValue[]; mutable: boolean }
   | { kind: 'map'; entries: Map<string, AnimaValue>; mutable: boolean }
-  | { kind: 'function'; name: string; params: ParamDef[]; body: SyntaxNodeRef; closure: Environment }
+  | { kind: 'function'; name: string; params: ParamDef[]; body: SyntaxNodeRef; closure: Environment; returnsLambda?: boolean }
   | { kind: 'builtin'; name: string; fn: BuiltinFn }
   | { kind: 'entity'; typeName: string; fields: Map<string, AnimaValue>; fieldOrder: string[] }
   | { kind: 'entity_type'; typeName: string; fieldDefs: EntityFieldDef[]; invariants: SyntaxNodeRef[]; closure: Environment }

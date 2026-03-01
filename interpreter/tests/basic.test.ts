@@ -1303,4 +1303,139 @@ describe('Interpreter integration', () => {
     }
     expect(output).toBe('[1, 2, 3]\n{a: 1}\n');
   });
+
+  // ---- Break ----
+
+  it('break exits for loop early', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        var sum = 0
+        for (i in 1..10) {
+            if (i > 5) break
+            sum = sum + i
+        }
+        println(sum.toString())
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('15\n');
+  });
+
+  // ---- Continue ----
+
+  it('continue skips to next iteration', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        var sum = 0
+        for (i in 1..10) {
+            if (i % 2 != 0) continue
+            sum = sum + i
+        }
+        println(sum.toString())
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('30\n');
+  });
+
+  // ---- Try/catch/finally ----
+
+  it('finally block always executes', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        var log = ""
+        try {
+            log = log + "try "
+            val bad = 1 / 0
+        } catch (e: Exception) {
+            log = log + "catch "
+        } finally {
+            log = log + "finally"
+        }
+        println(log)
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('try catch finally\n');
+  });
+
+  // ---- Nested functions ----
+
+  it('nested function declarations work', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        fun main() {
+            fun double(x: Int): Int = x * 2
+            println(double(5).toString())
+        }
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('10\n');
+  });
+
+  // ---- Closures ----
+
+  it('closures capture enclosing scope', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        fun makeAdder(n: Int): (Int) -> Int = { x: Int -> x + n }
+        val add5 = makeAdder(5)
+        println(add5(3).toString())
+        println(add5(10).toString())
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('8\n15\n');
+  });
 });

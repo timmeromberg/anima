@@ -39,6 +39,7 @@ import {
   AnimaNameError,
   ReturnSignal,
   BreakSignal,
+  ContinueSignal,
 } from './errors';
 import { registerBuiltins } from './builtins';
 import { requiredField, childrenOfType, childOfType } from './ast';
@@ -280,6 +281,11 @@ export class Interpreter {
     const bodyNode = requiredField(node, 'body');
 
     const fn = mkFunction(name, params, bodyNode, env);
+    // If body is a lambda with params, calling this function should return the lambda as a value
+    if (bodyNode.type === 'lambda_expression' &&
+        bodyNode.namedChildren.some(c => c.type === 'lambda_parameters')) {
+      (fn as any).returnsLambda = true;
+    }
 
     if (receiverNode) {
       // Extension function: fun String.shout() = ...
@@ -1293,6 +1299,7 @@ export class Interpreter {
         this.evalBlock(bodyNode, loopEnv);
       } catch (e) {
         if (e instanceof BreakSignal) break;
+        if (e instanceof ContinueSignal) continue;
         throw e;
       }
     }
@@ -1311,6 +1318,7 @@ export class Interpreter {
         this.evalBlock(bodyNode, env);
       } catch (e) {
         if (e instanceof BreakSignal) break;
+        if (e instanceof ContinueSignal) continue;
         throw e;
       }
     }
@@ -1384,7 +1392,10 @@ export class Interpreter {
   // ==================================================================
 
   private evalIdentifier(node: SyntaxNodeRef, env: Environment): AnimaValue {
-    return env.get(node.text);
+    const name = node.text;
+    if (name === 'break') throw new BreakSignal();
+    if (name === 'continue') throw new ContinueSignal();
+    return env.get(name);
   }
 
   private evalQualifiedIdentifier(node: SyntaxNodeRef, env: Environment): AnimaValue {
@@ -1832,6 +1843,10 @@ export class Interpreter {
         }
       }
 
+      // If this function's body is a lambda meant to be returned as a closure
+      if (callee.returnsLambda) {
+        return this.evalLambdaExpression(callee.body, funcEnv);
+      }
       return this.evalFunctionBody(callee.body, funcEnv);
     }
 
@@ -2397,28 +2412,52 @@ export class Interpreter {
   private evalTryExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
     const bodyNode = requiredField(node, 'body');
     const catchClauses = childrenOfType(node, 'catch_clause');
+    const finallyClause = node.namedChildren.find(c => c.type === 'finally_clause');
+
+    let result: AnimaValue = mkUnit();
+    let thrownError: any = null;
+    let hasError = false;
 
     try {
-      return this.evalBlock(bodyNode, env);
+      result = this.evalBlock(bodyNode, env);
     } catch (e) {
-      if (e instanceof ReturnSignal) throw e; // Don't catch return signals
-      if (e instanceof BreakSignal) throw e;
+      // Re-throw control flow signals (but still run finally)
+      if (e instanceof ReturnSignal || e instanceof BreakSignal || e instanceof ContinueSignal) {
+        if (finallyClause) {
+          const finallyBody = finallyClause.namedChildren[0];
+          if (finallyBody) this.evalBlock(finallyBody, env);
+        }
+        throw e;
+      }
 
+      let caught = false;
       for (const clause of catchClauses) {
         const nameNode = requiredField(clause, 'name');
         const clauseBody = requiredField(clause, 'body');
 
-        // For now, catch all errors (no type discrimination)
         const catchEnv = env.child();
         const errorMsg = e instanceof Error ? e.message : String(e);
         catchEnv.define(nameNode.text, mkString(errorMsg), false);
 
-        return this.evalBlock(clauseBody, catchEnv);
+        result = this.evalBlock(clauseBody, catchEnv);
+        caught = true;
+        break;
       }
 
-      // No matching catch clause -- re-throw
-      throw e;
+      if (!caught) {
+        thrownError = e;
+        hasError = true;
+      }
     }
+
+    // Execute finally block
+    if (finallyClause) {
+      const finallyBody = finallyClause.namedChildren[0];
+      if (finallyBody) this.evalBlock(finallyBody, env);
+    }
+
+    if (hasError) throw thrownError;
+    return result;
   }
 
   private evalNonNullExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
