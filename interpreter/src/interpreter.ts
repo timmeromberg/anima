@@ -43,8 +43,10 @@ import {
 } from './errors';
 import { registerBuiltins } from './builtins';
 import { requiredField, childrenOfType, childOfType } from './ast';
-import { nlSemanticEquals, nlSemanticImplies } from './nl';
-import { getMemoryStore } from './memory';
+import { nlSemanticEquals, nlSemanticImplies, nlExtractEntities } from './nl';
+import { getMemoryStore, registerMemoryBuiltins } from './memory';
+import { registerEvolutionBuiltins } from './evolution';
+import { registerNLBuiltins } from './nl';
 
 export class Interpreter {
   private globalEnv: Environment;
@@ -58,6 +60,9 @@ export class Interpreter {
   constructor() {
     this.globalEnv = new Environment();
     registerBuiltins(this.globalEnv);
+    registerMemoryBuiltins(this.globalEnv);
+    registerEvolutionBuiltins(this.globalEnv);
+    registerNLBuiltins(this.globalEnv);
   }
 
   /**
@@ -2148,6 +2153,20 @@ export class Interpreter {
           const fill = args.length > 1 && args[1].kind === 'string' ? args[1].value : ' ';
           return mkString(obj.value.padEnd(len, fill));
         });
+        // NL string members
+        case 'entities': return mkList(nlExtractEntities(obj.value).map(e => mkString(e)));
+        case 'clarify': return mkBuiltinMethod(() => {
+          const { nlClarify } = require('./nl');
+          return mkString(nlClarify(obj.value));
+        });
+        case 'summarize': return mkBuiltinMethod(() => {
+          const { nlSummarize } = require('./nl');
+          return mkString(nlSummarize(obj.value));
+        });
+        case 'operations': return mkList([
+          mkString('entities'), mkString('clarify'), mkString('summarize'),
+          mkString('classify'),
+        ]);
       }
     }
 

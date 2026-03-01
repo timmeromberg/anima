@@ -1081,13 +1081,11 @@ describe('Interpreter integration', () => {
 
   it('remember and recall', () => {
     if (!treeSitterAvailable) return;
-    // Register memory builtins manually for the test
-    const { MemoryStore, setMemoryStore, registerMemoryBuiltins } = require('../src/memory');
+    const { MemoryStore, setMemoryStore } = require('../src/memory');
     setMemoryStore(new MemoryStore());
     const { Interpreter } = require('../src/interpreter');
     const { parse } = require('../src/parser');
     const interp = new Interpreter();
-    registerMemoryBuiltins(interp.getGlobalEnv());
 
     let output = '';
     const orig = process.stdout.write;
@@ -1108,12 +1106,11 @@ describe('Interpreter integration', () => {
 
   it('forget removes memory entry', () => {
     if (!treeSitterAvailable) return;
-    const { MemoryStore, setMemoryStore, registerMemoryBuiltins } = require('../src/memory');
+    const { MemoryStore, setMemoryStore } = require('../src/memory');
     setMemoryStore(new MemoryStore());
     const { Interpreter } = require('../src/interpreter');
     const { parse } = require('../src/parser');
     const interp = new Interpreter();
-    registerMemoryBuiltins(interp.getGlobalEnv());
 
     let output = '';
     const orig = process.stdout.write;

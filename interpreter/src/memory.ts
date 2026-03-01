@@ -87,17 +87,29 @@ export class MemoryStore {
 
   /** Recall memories matching a query (keyword-based). */
   recall(query: string, limit = 5): MemoryEntry[] {
-    const queryWords = new Set(query.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+    const queryLower = query.toLowerCase();
+    const queryWords = new Set(queryLower.split(/[\s_-]+/).filter(w => w.length > 1));
     const scored: Array<{ entry: MemoryEntry; score: number }> = [];
 
     for (const entry of this.entries.values()) {
       let score = 0;
+
+      // Exact key match gets highest score
+      if (entry.key.toLowerCase() === queryLower) {
+        score += 10;
+      }
+
+      // Substring match on key
+      if (entry.key.toLowerCase().includes(queryLower) || queryLower.includes(entry.key.toLowerCase())) {
+        score += 5;
+      }
+
       const keyWords = entry.key.toLowerCase().split(/[\s_-]+/);
       const valueStr = valueToString(entry.value).toLowerCase();
       const tagStr = entry.tags.join(' ').toLowerCase();
 
       for (const qw of queryWords) {
-        if (keyWords.some(kw => kw.includes(qw))) score += 2;
+        if (keyWords.some(kw => kw.includes(qw) || qw.includes(kw))) score += 2;
         if (valueStr.includes(qw)) score += 1;
         if (tagStr.includes(qw)) score += 1.5;
       }
