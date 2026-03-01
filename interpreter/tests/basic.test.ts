@@ -834,4 +834,140 @@ describe('Interpreter integration', () => {
     // 0.6 >= 0.5 => true
     expect(output).toBe('true\n0.6\n');
   });
+
+  // ---- Agent runtime ----
+
+  it('agent declaration and spawn', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent Counter {
+        context {
+          var count: Int = 0
+        }
+
+        fun increment(): Unit {
+          count = count + 1
+        }
+
+        fun getCount(): Int {
+          return count
+        }
+      }
+
+      val c = spawn<Counter>()
+      println(c.getCount())
+      c.increment()
+      c.increment()
+      println(c.getCount())
+    `);
+    expect(output).toBe('0\n2\n');
+  });
+
+  it('agent with constructor parameters', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent Greeter(val greeting: String) {
+        fun greet(name: String): String {
+          return greeting + " " + name
+        }
+      }
+
+      val g = spawn<Greeter>("Hello")
+      println(g.greet("World"))
+    `);
+    expect(output).toBe('Hello World\n');
+  });
+
+  it('agent with named spawn arguments', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent Greeter(val greeting: String) {
+        fun greet(name: String): String {
+          return greeting + " " + name
+        }
+      }
+
+      val g = spawn<Greeter>(greeting = "Hi")
+      println(g.greet("there"))
+    `);
+    expect(output).toBe('Hi there\n');
+  });
+
+  it('agent context field access', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent Store {
+        context {
+          var items: Int = 0
+        }
+
+        fun add(n: Int): Unit {
+          items = items + n
+        }
+      }
+
+      val s = spawn<Store>()
+      s.add(5)
+      println(s.items)
+    `);
+    expect(output).toBe('5\n');
+  });
+
+  it('agent toString', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent MyBot {
+        context {
+          val name: String = "bot"
+        }
+      }
+
+      val b = spawn<MyBot>()
+      println(b)
+    `);
+    expect(output).toBe('<agent MyBot>\n');
+  });
+
+  it('agent with intent method', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent Validator {
+        intent fun validate(x: Int): Int {
+          ensure { output > 0 }
+          fallback { 1 }
+        }
+      }
+
+      val v = spawn<Validator>()
+      println(v.validate(42))
+    `);
+    expect(output).toBe('1\n');
+  });
+
+  it('multiple independent agent instances', () => {
+    if (!treeSitterAvailable) return;
+    const output = runProgram(`
+      agent Counter {
+        context {
+          var count: Int = 0
+        }
+        fun inc(): Unit {
+          count = count + 1
+        }
+        fun get(): Int {
+          return count
+        }
+      }
+
+      val a = spawn<Counter>()
+      val b = spawn<Counter>()
+      a.inc()
+      a.inc()
+      a.inc()
+      b.inc()
+      println(a.get())
+      println(b.get())
+    `);
+    expect(output).toBe('3\n1\n');
+  });
 });

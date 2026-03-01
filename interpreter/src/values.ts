@@ -32,6 +32,8 @@ export type AnimaValue =
   | { kind: 'entity'; typeName: string; fields: Map<string, AnimaValue>; fieldOrder: string[] }
   | { kind: 'entity_type'; typeName: string; fieldDefs: EntityFieldDef[]; invariants: SyntaxNodeRef[]; closure: Environment }
   | { kind: 'confident'; value: AnimaValue; confidence: number }
+  | { kind: 'agent'; typeName: string; context: Environment; methods: Map<string, AnimaValue> }
+  | { kind: 'agent_type'; typeName: string; declaration: SyntaxNodeRef; closure: Environment }
   | { kind: 'unit' };
 
 export interface EntityFieldDef {
@@ -107,6 +109,14 @@ export function mkEntityType(
   return { kind: 'entity_type', typeName, fieldDefs, invariants, closure };
 }
 
+export function mkAgent(typeName: string, context: Environment, methods: Map<string, AnimaValue>): AnimaValue {
+  return { kind: 'agent', typeName, context, methods };
+}
+
+export function mkAgentType(typeName: string, declaration: SyntaxNodeRef, closure: Environment): AnimaValue {
+  return { kind: 'agent_type', typeName, declaration, closure };
+}
+
 export function mkConfident(value: AnimaValue, confidence: number): AnimaValue {
   // Clamp to [0, 1] and round to avoid floating point noise
   const c = Math.round(Math.max(0, Math.min(1, confidence)) * 1e10) / 1e10;
@@ -180,6 +190,8 @@ export function valueToString(v: AnimaValue): string {
     }
     case 'entity_type': return `<entity_type ${v.typeName}>`;
     case 'confident': return `${valueToString(v.value)} @ ${v.confidence}`;
+    case 'agent': return `<agent ${v.typeName}>`;
+    case 'agent_type': return `<agent_type ${v.typeName}>`;
   }
 }
 

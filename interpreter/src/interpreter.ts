@@ -23,6 +23,8 @@ import {
   mkEntityType,
   mkBuiltin,
   mkConfident,
+  mkAgent,
+  mkAgentType,
   getConfidence,
   unwrapConfident,
   isTruthy,
@@ -206,8 +208,9 @@ export class Interpreter {
         return this.evalIntentDeclaration(node, env);
       case 'fuzzy_declaration':
         return this.evalFuzzyDeclaration(node, env);
-      case 'evolving_declaration':
       case 'agent_declaration':
+        return this.evalAgentDeclaration(node, env);
+      case 'evolving_declaration':
       case 'feature_declaration':
       case 'context_declaration':
       case 'resource_declaration':
@@ -218,10 +221,11 @@ export class Interpreter {
       // ---- AI-first expression stubs ----
       case 'confidence_expression_val':
         return this.evalConfidenceExpression(node, env);
+      case 'spawn_expression':
+        return this.evalSpawnExpression(node, env);
       case 'semantic_expression':
       case 'delegate_expression':
       case 'parallel_expression':
-      case 'spawn_expression':
       case 'recall_expression':
       case 'ask_expression':
       case 'diagnose_expression':
@@ -691,6 +695,164 @@ export class Interpreter {
     const confidence = totalWeight > 0 ? totalScore / totalWeight : 0;
     const result = confidence >= 0.5;
     return mkConfident(mkBool(result), confidence);
+  }
+
+  // ==================================================================
+  // Agent Runtime
+  // ==================================================================
+
+  private evalAgentDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+
+    // Register the agent type — the declaration node and closure are stored
+    // so that spawn can instantiate agents later.
+    const agentType = mkAgentType(name, node, env);
+    env.defineOrUpdate(name, agentType, false);
+    return mkUnit();
+  }
+
+  private evalSpawnExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // spawn<AgentType>(args...)
+    const typeNode = requiredField(node, 'type');
+    const typeName = typeNode.text;
+
+    // Look up the agent type
+    const agentType = env.get(typeName);
+    if (agentType.kind !== 'agent_type') {
+      throw new AnimaTypeError(
+        `'${typeName}' is not an agent type`,
+        node.startPosition.row + 1,
+        node.startPosition.column,
+      );
+    }
+
+    // Collect spawn arguments (positional and named)
+    const args: AnimaValue[] = [];
+    const namedArgs = new Map<string, AnimaValue>();
+    for (const child of node.namedChildren) {
+      // Skip the type node
+      if (child === typeNode || child.type === 'type_identifier' || child.type === 'identifier') {
+        // May be the type argument — skip if position matches
+        if (child.text === typeName) continue;
+      }
+      if (child.type === 'named_argument') {
+        const argName = requiredField(child, 'name').text;
+        const argValue = this.evalNode(requiredField(child, 'value'), env);
+        namedArgs.set(argName, argValue);
+        continue;
+      }
+      // Regular positional argument
+      if (child.type !== 'type_identifier' && child.type !== 'identifier') {
+        args.push(this.evalNode(child, env));
+      }
+    }
+
+    return this.instantiateAgent(agentType, args, namedArgs, node, env);
+  }
+
+  private instantiateAgent(
+    agentType: Extract<AnimaValue, { kind: 'agent_type' }>,
+    args: AnimaValue[],
+    namedArgs: Map<string, AnimaValue>,
+    callSite: SyntaxNodeRef,
+    callerEnv: Environment,
+  ): AnimaValue {
+    const decl = agentType.declaration;
+    const agentEnv = agentType.closure.child();
+
+    // Bind constructor parameters from the declaration
+    const paramNodes: SyntaxNodeRef[] = [];
+    for (const child of decl.namedChildren) {
+      if (child.type === 'parameter' || child.type === 'field_parameter') {
+        paramNodes.push(child);
+      }
+    }
+
+    for (let i = 0; i < paramNodes.length; i++) {
+      const pNode = paramNodes[i];
+      const pName = requiredField(pNode, 'name').text;
+      const namedValue = namedArgs.get(pName);
+      if (namedValue !== undefined) {
+        agentEnv.define(pName, namedValue, false);
+      } else if (i < args.length) {
+        agentEnv.define(pName, args[i], false);
+      } else {
+        const defaultNode = pNode.childForFieldName('default');
+        if (defaultNode) {
+          agentEnv.define(pName, this.evalNode(defaultNode, callerEnv), false);
+        } else {
+          throw new AnimaRuntimeError(
+            `Missing argument '${pName}' in spawn<${agentType.typeName}>()`,
+            callSite.startPosition.row + 1,
+            callSite.startPosition.column,
+          );
+        }
+      }
+    }
+
+    // Walk the agent body sections
+    const bodyNode = requiredField(decl, 'body');
+    const methods = new Map<string, AnimaValue>();
+
+    for (const section of bodyNode.namedChildren) {
+      switch (section.type) {
+        case 'agent_context_section': {
+          // Initialize context fields
+          for (const fieldDecl of section.namedChildren) {
+            if (fieldDecl.type === 'field_declaration') {
+              const fieldName = requiredField(fieldDecl, 'name').text;
+              const isMutable = fieldDecl.children.some(c => c.text === 'var');
+              const valueNode = fieldDecl.childForFieldName('value');
+              const value = valueNode ? this.evalNode(valueNode, agentEnv) : mkNull();
+              agentEnv.define(fieldName, value, isMutable);
+            }
+          }
+          break;
+        }
+        case 'tools_section': {
+          // Tools are declared but not implemented in v0.1 — register stubs
+          for (const toolDecl of section.namedChildren) {
+            if (toolDecl.type === 'tool_declaration') {
+              const toolName = requiredField(toolDecl, 'name').text;
+              agentEnv.define(toolName, mkBuiltin(toolName, () => {
+                throw new AnimaRuntimeError(`Tool '${toolName}' is not connected to an implementation`);
+              }), false);
+            }
+          }
+          break;
+        }
+        case 'boundaries_section': {
+          // Store boundary values in the agent env for runtime checking
+          for (const rule of section.namedChildren) {
+            if (rule.type === 'boundary_assignment') {
+              const bName = requiredField(rule, 'name').text;
+              const bValue = this.evalNode(requiredField(rule, 'value'), agentEnv);
+              agentEnv.define(bName, bValue, false);
+            }
+            // can/cannot/requiresApproval blocks — stored but not enforced in v0.1
+          }
+          break;
+        }
+        case 'function_declaration': {
+          // Regular methods
+          const fn = this.evalFunctionDeclaration(section, agentEnv);
+          const fnName = requiredField(section, 'name').text;
+          methods.set(fnName, agentEnv.get(fnName));
+          break;
+        }
+        case 'intent_declaration': {
+          // Intent methods
+          this.evalIntentDeclaration(section, agentEnv);
+          const fnName = requiredField(section, 'name').text;
+          methods.set(fnName, agentEnv.get(fnName));
+          break;
+        }
+        // team_section, evolving_declaration, on_handler — not yet implemented
+      }
+    }
+
+    return mkAgent(agentType.typeName, agentEnv, methods);
   }
 
   // ==================================================================
@@ -1290,6 +1452,10 @@ export class Interpreter {
       return this.constructEntity(callee, args, namedArgs, callSite, callerEnv);
     }
 
+    if (callee.kind === 'agent_type') {
+      return this.instantiateAgent(callee, args, namedArgs, callSite, callerEnv);
+    }
+
     if (callee.kind === 'builtin') {
       return callee.fn(args, namedArgs);
     }
@@ -1599,6 +1765,23 @@ export class Interpreter {
           }
           return mkEntity(obj.typeName, newFields, [...obj.fieldOrder]);
         });
+      }
+    }
+
+    // Agent members
+    if (obj.kind === 'agent') {
+      // Method lookup
+      const method = obj.methods.get(name);
+      if (method) return method;
+
+      // Context field access
+      try {
+        return obj.context.get(name);
+      } catch (_) { /* fall through */ }
+
+      switch (name) {
+        case 'typeName': return mkString(obj.typeName);
+        case 'toString': return mkBuiltinMethod(() => mkString(valueToString(obj)));
       }
     }
 
