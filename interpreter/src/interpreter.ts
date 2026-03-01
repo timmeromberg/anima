@@ -1766,6 +1766,43 @@ export class Interpreter {
 
   private evalCallExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
     const funcNode = requiredField(node, 'function');
+
+    // Handle trailing lambda after call: `fold(1) { acc, x -> ... }`
+    // Parser produces: call_expression(function=call_expression(fold, 1), trailing_lambda=lambda)
+    // We merge into a single call: fold(1, lambda)
+    const trailingLambda = node.namedChildren.find(c =>
+      c.type === 'lambda_expression' &&
+      !(c.startPosition.row === funcNode.startPosition.row &&
+        c.startPosition.column === funcNode.startPosition.column));
+    if (funcNode.type === 'call_expression' && trailingLambda) {
+      // Evaluate the inner call_expression's function and args, then append the trailing lambda
+      const innerFuncNode = requiredField(funcNode, 'function');
+      const innerCallee = this.evalNode(innerFuncNode, env);
+      const args: AnimaValue[] = [];
+      const namedArgs = new Map<string, AnimaValue>();
+      const innerFuncStart = innerFuncNode.startPosition;
+      const innerFuncEnd = innerFuncNode.endPosition;
+
+      for (const child of funcNode.namedChildren) {
+        if (child.startPosition.row === innerFuncStart.row &&
+            child.startPosition.column === innerFuncStart.column &&
+            child.endPosition.row === innerFuncEnd.row &&
+            child.endPosition.column === innerFuncEnd.column) continue;
+        if (child.type === 'lambda_expression') {
+          args.push(this.evalLambdaExpression(child, env));
+          continue;
+        }
+        if (child.type === 'named_argument') {
+          namedArgs.set(requiredField(child, 'name').text, this.evalNode(requiredField(child, 'value'), env));
+          continue;
+        }
+        args.push(this.evalNode(child, env));
+      }
+      // Append the outer trailing lambda
+      args.push(this.evalLambdaExpression(trailingLambda, env));
+      return this.callFunction(innerCallee, args, namedArgs, node, env);
+    }
+
     const callee = this.evalNode(funcNode, env);
 
     // Collect arguments: skip the function node, gather the rest
@@ -1951,7 +1988,14 @@ export class Interpreter {
           return this.listFlatMap(obj, args[0], node);
         });
         case 'reduce': return mkBuiltinMethod((args) => {
-          return this.listReduce(obj, args[0], args[1], node);
+          // reduce uses first element as initial value, takes only a lambda
+          const listVal = obj as Extract<AnimaValue, { kind: 'list' }>;
+          if (listVal.elements.length === 0) {
+            throw new AnimaRuntimeError('reduce on empty list');
+          }
+          const initial = listVal.elements[0];
+          const rest = mkList(listVal.elements.slice(1));
+          return this.listReduce(rest as Extract<AnimaValue, { kind: 'list' }>, initial, args[0], node);
         });
         case 'fold': return mkBuiltinMethod((args) => {
           return this.listReduce(obj, args[0], args[1], node);
@@ -2020,6 +2064,25 @@ export class Interpreter {
         });
         case 'sumOf': return mkBuiltinMethod((args) => {
           return this.listSumOf(obj, args[0], node);
+        });
+        case 'associateBy': return mkBuiltinMethod((args) => {
+          const entries = new Map<string, AnimaValue>();
+          for (const el of obj.elements) {
+            const key = this.callFunction(args[0], [el], new Map(), node, this.globalEnv);
+            entries.set(valueToString(key), el);
+          }
+          return mkMap(entries);
+        });
+        case 'groupBy': return mkBuiltinMethod((args) => {
+          const groups = new Map<string, AnimaValue[]>();
+          for (const el of obj.elements) {
+            const key = valueToString(this.callFunction(args[0], [el], new Map(), node, this.globalEnv));
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push(el);
+          }
+          const entries = new Map<string, AnimaValue>();
+          for (const [k, v] of groups) entries.set(k, mkList(v));
+          return mkMap(entries);
         });
       }
     }
