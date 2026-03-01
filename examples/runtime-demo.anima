@@ -1,0 +1,160 @@
+// runtime-demo.anima
+// A comprehensive runnable demo exercising all implemented Anima features.
+
+// --- Entities ---
+
+data entity Point(val x: Int, val y: Int)
+
+data entity Person(
+    val name: String,
+    val age: Int
+) {
+    invariant { age >= 0 }
+}
+
+// --- Sealed class hierarchy ---
+
+sealed class Shape {
+    data class Circle(val radius: Float) : Shape()
+    data class Rectangle(val width: Float, val height: Float) : Shape()
+    object None : Shape()
+}
+
+// --- Extension function ---
+
+fun String.shout(): String = this + "!"
+
+// --- Intent function ---
+
+intent fun safeDivide(a: Int, b: Int): Int {
+    ensure { b != 0 }
+    return a / b
+}
+
+// --- Fuzzy predicate ---
+
+fuzzy fun isWarm(temp: Float): Boolean {
+    factors {
+        temp > 30.0   weight 0.5
+        temp > 20.0   weight 0.3
+        temp > 10.0   weight 0.2
+    }
+}
+
+// --- Agent ---
+
+agent Greeter {
+    context {
+        val greeting: String = "Hello"
+    }
+
+    boundaries {
+        maxToolCalls = 5
+        can { greet; introduce }
+        cannot { delete; modify }
+    }
+
+    fun greet(name: String): String {
+        return greeting + ", " + name + "!"
+    }
+}
+
+// --- Main: exercise everything ---
+
+fun main() {
+    // Basic output
+    println("=== Anima Runtime Demo ===")
+    println("")
+
+    // Entity creation and field access
+    val alice = Person("Alice", 30)
+    println("Person: " + alice.name + ", age " + alice.age.toString())
+
+    val p = Point(3, 4)
+    println("Point: (" + p.x.toString() + ", " + p.y.toString() + ")")
+
+    // Sealed class instantiation
+    val circle = Shape.Circle(5.0)
+    val rect = Shape.Rectangle(3.0, 4.0)
+    println("Circle radius: " + circle.radius.toString())
+    println("Rectangle: " + rect.width.toString() + " x " + rect.height.toString())
+
+    // Collections
+    val nums = listOf(1, 2, 3, 4, 5)
+    println("List size: " + nums.size.toString())
+    val doubled = nums.map { it * 2 }
+    println("Doubled: " + doubled.toString())
+    val evens = nums.filter { it % 2 == 0 }
+    println("Evens: " + evens.toString())
+
+    // Map
+    val scores = mapOf("alice" to 95, "bob" to 87, "carol" to 92)
+    println("Alice's score: " + scores["alice"].toString())
+
+    // String operations
+    println("Shout: " + "hello".shout())
+
+    // When expression
+    val grade = when {
+        95 > 90 -> "A"
+        95 > 80 -> "B"
+        else -> "C"
+    }
+    println("Grade: " + grade)
+
+    // For loop
+    var sum = 0
+    for (n in nums) {
+        sum = sum + n
+    }
+    println("Sum of 1..5: " + sum.toString())
+
+    // Intent function (should work, b != 0)
+    val result = safeDivide(10, 3)
+    println("10 / 3 = " + result.toString())
+
+    // Intent function violation
+    try {
+        val bad = safeDivide(10, 0)
+    } catch (e: Exception) {
+        println("Caught: ensure clause violated")
+    }
+
+    // Fuzzy predicate
+    val warmScore = isWarm(25.0)
+    println("isWarm(25.0): " + warmScore.toString())
+
+    // Confidence types
+    val prediction = "cat" @ 0.92
+    println("Prediction: " + prediction.value + " @ " + prediction.confidence.toString())
+
+    // Agent spawn and method call
+    val greeter = spawn<Greeter>()
+    println("Agent greeting: " + greeter.greet("World"))
+
+    // Semantic equality (NL)
+    val similar = "hello world" ~= "hello world"
+    println("Semantic eq (same): " + similar.toString())
+
+    val different = "hello" ~= "goodbye forever"
+    println("Semantic eq (diff): " + different.toString())
+
+    // Lambda and higher-order
+    val add = { a: Int, b: Int -> a + b }
+    println("Lambda add(3, 4): " + add(3, 4).toString())
+
+    // Range
+    var rangeSum = 0
+    for (i in 1..5) {
+        rangeSum = rangeSum + i
+    }
+    println("Range sum 1..5: " + rangeSum.toString())
+
+    // Elvis operator
+    val name: String? = null
+    val display = name ?: "Anonymous"
+    println("Elvis: " + display)
+
+    println("")
+    println("=== All features working! ===")
+}

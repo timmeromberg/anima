@@ -466,6 +466,9 @@ export class Interpreter {
     const nameNode = requiredField(node, 'name');
     const sealedName = nameNode.text;
 
+    // Namespace map for Shape.Circle / Shape.None access
+    const nsEntries = new Map<string, AnimaValue>();
+
     // Register each sealed variant as an entity type constructor
     for (const child of node.namedChildren) {
       if (child.type === 'sealed_member') {
@@ -490,9 +493,23 @@ export class Interpreter {
             (variantType as any).sealedParent = sealedName;
           }
           env.defineOrUpdate(variantName, variantType, false);
+          nsEntries.set(variantName, variantType);
+        }
+
+        const sealedObj = childOfType(child, 'sealed_object');
+        if (sealedObj) {
+          const objName = requiredField(sealedObj, 'name').text;
+          // Singleton object — create an entity instance with no fields
+          const objValue = mkEntity(objName, new Map(), []);
+          (objValue as any).sealedParent = sealedName;
+          env.defineOrUpdate(objName, objValue, false);
+          nsEntries.set(objName, objValue);
         }
       }
     }
+
+    // Register the sealed class name as a namespace for qualified access
+    env.defineOrUpdate(sealedName, mkMap(nsEntries), false);
 
     return mkUnit();
   }
@@ -1732,10 +1749,16 @@ export class Interpreter {
         case 'value': return obj.value;
         case 'unwrap': return mkBuiltinMethod(() => obj.value);
         case 'decompose': return mkBuiltinMethod(() => mkList([obj.value, mkFloat(obj.confidence)]));
+        case 'toString': return mkBuiltinMethod(() => mkString(valueToString(obj)));
       }
       // For other members, delegate to inner value and propagate confidence
       const innerResult = this.accessMember(obj.value, name, node);
       return this.wrapIfConfident(innerResult, obj.confidence);
+    }
+
+    // Universal toString method
+    if (name === 'toString') {
+      return mkBuiltinMethod(() => mkString(valueToString(obj)));
     }
 
     // List members
