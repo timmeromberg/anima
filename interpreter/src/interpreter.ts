@@ -2443,15 +2443,23 @@ export class Interpreter {
           }
         }
       }
-    } else {
-      // Implicit 'it' parameter for lambdas without explicit params
-      // Only if the lambda has statements (not being used as a block)
+    } else if (this.nodeReferencesIt(node)) {
+      // Implicit 'it' parameter only when the lambda body actually uses 'it'
       params.push({ name: 'it' });
     }
 
     // Build a synthetic body: we'll use the node itself and handle
     // lambda body evaluation specially
     return mkFunction('<lambda>', params, node, env);
+  }
+
+  /** Recursively check if any identifier node in the subtree has text 'it'. */
+  private nodeReferencesIt(node: SyntaxNodeRef): boolean {
+    if (node.type === 'identifier' && node.text === 'it') return true;
+    for (const child of node.namedChildren) {
+      if (this.nodeReferencesIt(child)) return true;
+    }
+    return false;
   }
 
   private evalParenthesizedExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
