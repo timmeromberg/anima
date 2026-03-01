@@ -12,6 +12,16 @@ import * as path from 'path';
 import { parse, isTreeSitterAvailable, getTreeSitterError } from './parser';
 import { Interpreter } from './interpreter';
 import { AnimaError, AnimaRuntimeError } from './errors';
+// Type checker is loaded dynamically to avoid rootDir constraints across packages.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let TypeCheckerModule: { TypeChecker: any; formatDiagnostic: (d: any) => string } | null = null;
+try {
+  const checker = require('../../typechecker/src/checker');
+  const diagnostics = require('../../typechecker/src/diagnostics');
+  TypeCheckerModule = { TypeChecker: checker.TypeChecker, formatDiagnostic: diagnostics.formatDiagnostic };
+} catch {
+  // Type checker not available — check command will do parse-only validation
+}
 
 function main(): void {
   const args = process.argv.slice(2);
@@ -90,7 +100,7 @@ function main(): void {
 }
 
 /**
- * Run parse-only validation on one or more files.
+ * Run parse and type-check validation on one or more files.
  * Returns 0 if all files are clean, 1 if any have errors.
  */
 function runCheck(files: string[]): number {
@@ -113,11 +123,39 @@ function runCheck(files: string[]): number {
     if (result.hasErrors) {
       hasAnyErrors = true;
       const count = result.errors.length;
-      console.log(`\u2717 ${displayName} \u2014 ${count} error${count === 1 ? '' : 's'}`);
+      console.log(`\u2717 ${displayName} \u2014 ${count} parse error${count === 1 ? '' : 's'}`);
       for (const err of result.errors) {
         console.log(`  Line ${err.line}, Col ${err.column}: ${err.message}`);
       }
-    } else {
+      // Still try type checking even with parse errors (tree-sitter produces partial trees)
+    }
+
+    // Run type checker if available
+    if (TypeCheckerModule) {
+      const checker = new TypeCheckerModule.TypeChecker();
+      const diagnostics: Array<{ severity: string; message: string; line: number; column: number }> = checker.check(result.rootNode);
+      const errors = diagnostics.filter(d => d.severity === 'error');
+      const warnings = diagnostics.filter(d => d.severity === 'warning');
+
+      if (errors.length > 0) {
+        hasAnyErrors = true;
+      }
+
+      if (diagnostics.length > 0) {
+        if (!result.hasErrors) {
+          // Print header only if we didn't already print parse errors
+          const parts: string[] = [];
+          if (errors.length > 0) parts.push(`${errors.length} error${errors.length === 1 ? '' : 's'}`);
+          if (warnings.length > 0) parts.push(`${warnings.length} warning${warnings.length === 1 ? '' : 's'}`);
+          console.log(`\u2717 ${displayName} \u2014 ${parts.join(', ')}`);
+        }
+        for (const d of diagnostics) {
+          console.log(`  ${TypeCheckerModule.formatDiagnostic(d)}`);
+        }
+      } else if (!result.hasErrors) {
+        console.log(`\u2713 ${displayName} \u2014 no errors`);
+      }
+    } else if (!result.hasErrors) {
       console.log(`\u2713 ${displayName} \u2014 no errors`);
     }
   }
@@ -140,7 +178,7 @@ function printUsage(): void {
   console.log('Usage:');
   console.log('  npx ts-node src/index.ts <file.anima>            Run an Anima file');
   console.log('  npx ts-node src/index.ts run <file.anima>        Run an Anima file');
-  console.log('  npx ts-node src/index.ts check <file.anima> ...  Check files for parse errors');
+  console.log('  npx ts-node src/index.ts check <file.anima> ...  Check files for parse and type errors');
   console.log('  npx ts-node src/index.ts --eval "<code>"         Evaluate inline code');
   console.log('  npx ts-node src/index.ts --help                  Show this help');
 }
