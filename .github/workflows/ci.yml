@@ -78,6 +78,10 @@ jobs:
         working-directory: interpreter
         run: npx jest
 
+      - name: Execute runtime demo
+        working-directory: interpreter
+        run: npx ts-node src/index.ts ../examples/runtime-demo.anima
+
   typechecker:
     name: Type Checker
     runs-on: ubuntu-latest
