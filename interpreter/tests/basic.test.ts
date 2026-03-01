@@ -1194,4 +1194,113 @@ describe('Interpreter integration', () => {
     expect(entities).toContain('Doctor');
     expect(entities).toContain('Smith');
   });
+
+  // ---- Sealed class namespace access ----
+
+  it('sealed class variants accessible via Parent.Variant', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        sealed class Color {
+            data class RGB(val r: Int, val g: Int, val b: Int) : Color()
+            object Black : Color()
+        }
+        val c = Color.RGB(255, 0, 0)
+        println(c.r.toString())
+        val b = Color.Black
+        println(b.toString())
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('255\nBlack()\n');
+  });
+
+  // ---- Context declaration ----
+
+  it('context declaration creates tier-based map', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        context AppState {
+            persistent {
+                val theme: String = "dark"
+            }
+            session {
+                var count: Int = 0
+            }
+        }
+        println(AppState.persistent.theme)
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('dark\n');
+  });
+
+  // ---- Protocol declaration ----
+
+  it('protocol message types are constructable', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        protocol Chat {
+            message Hello(val name: String)
+            message Bye(val reason: String)
+        }
+        val msg = Chat.Hello("World")
+        println(msg.name)
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('World\n');
+  });
+
+  // ---- Universal toString ----
+
+  it('toString works on all value types', () => {
+    if (!treeSitterAvailable) return;
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const result = parse(`
+        println(listOf(1, 2, 3).toString())
+        println(mapOf("a" to 1).toString())
+      `);
+      const interp = new Interpreter();
+      interp.run(result.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('[1, 2, 3]\n{a: 1}\n');
+  });
 });
