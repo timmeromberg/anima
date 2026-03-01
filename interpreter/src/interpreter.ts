@@ -1961,6 +1961,36 @@ export class Interpreter {
           const end = args.length > 1 ? asNumber(args[1]) : obj.value.length;
           return mkString(obj.value.substring(start, end));
         });
+        case 'replace': return mkBuiltinMethod((args) => {
+          if (args[0].kind !== 'string' || args[1].kind !== 'string') throw new AnimaTypeError('replace() expects (String, String)');
+          return mkString(obj.value.split(args[0].value).join(args[1].value));
+        });
+        case 'indexOf': return mkBuiltinMethod((args) => {
+          if (args[0].kind !== 'string') throw new AnimaTypeError('indexOf() expects a String');
+          return mkInt(obj.value.indexOf(args[0].value));
+        });
+        case 'toInt': return mkBuiltinMethod(() => {
+          const n = parseInt(obj.value, 10);
+          if (isNaN(n)) throw new AnimaRuntimeError(`Cannot convert '${obj.value}' to Int`);
+          return mkInt(n);
+        });
+        case 'toFloat': return mkBuiltinMethod(() => {
+          const n = parseFloat(obj.value);
+          if (isNaN(n)) throw new AnimaRuntimeError(`Cannot convert '${obj.value}' to Float`);
+          return mkFloat(n);
+        });
+        case 'reversed': return mkBuiltinMethod(() => mkString(obj.value.split('').reverse().join('')));
+        case 'repeat': return mkBuiltinMethod((args) => mkString(obj.value.repeat(asNumber(args[0]))));
+        case 'padStart': return mkBuiltinMethod((args) => {
+          const len = asNumber(args[0]);
+          const fill = args.length > 1 && args[1].kind === 'string' ? args[1].value : ' ';
+          return mkString(obj.value.padStart(len, fill));
+        });
+        case 'padEnd': return mkBuiltinMethod((args) => {
+          const len = asNumber(args[0]);
+          const fill = args.length > 1 && args[1].kind === 'string' ? args[1].value : ' ';
+          return mkString(obj.value.padEnd(len, fill));
+        });
       }
     }
 
