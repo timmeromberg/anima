@@ -510,6 +510,14 @@ export class TypeChecker {
         // No checking needed for literal string content
         break;
 
+      case 'try_expression':
+        this.checkTryExpression(node, env);
+        break;
+
+      case 'lambda_expression':
+        this.checkLambdaExpression(node, env);
+        break;
+
       // Declarations already handled in pass 1 — no additional pass-2 checking needed
       case 'sealed_declaration':
       case 'interface_declaration':
@@ -560,6 +568,52 @@ export class TypeChecker {
     this.collectDeclarations(node, blockEnv);
     for (const child of node.namedChildren) {
       this.checkNode(child, blockEnv);
+    }
+  }
+
+  private checkTryExpression(node: SyntaxNodeRef, env: TypeEnvironment): void {
+    for (const child of node.namedChildren) {
+      if (child.type === 'catch_clause') {
+        // Create scope with catch variable bound
+        const catchEnv = env.child();
+        const nameNode = child.childForFieldName('name');
+        if (nameNode) {
+          catchEnv.define(nameNode.text, mkAnyType());
+        }
+        // Check catch body
+        for (const cc of child.namedChildren) {
+          this.checkNode(cc, catchEnv);
+        }
+      } else if (child.type === 'finally_clause') {
+        this.checkChildren(child, env);
+      } else {
+        this.checkNode(child, env);
+      }
+    }
+  }
+
+  private checkLambdaExpression(node: SyntaxNodeRef, env: TypeEnvironment): void {
+    const lambdaEnv = env.child();
+    // Also define 'it' for single-param lambdas
+    lambdaEnv.define('it', mkAnyType());
+    // Bind lambda parameters
+    for (const child of node.namedChildren) {
+      if (child.type === 'lambda_parameters') {
+        for (const param of child.namedChildren) {
+          if (param.type === 'lambda_parameter') {
+            const nameNode = param.namedChildren[0]; // identifier
+            if (nameNode && nameNode.type === 'identifier') {
+              lambdaEnv.define(nameNode.text, mkAnyType());
+            }
+          }
+        }
+      }
+    }
+    // Check body (everything that's not lambda_parameters)
+    for (const child of node.namedChildren) {
+      if (child.type !== 'lambda_parameters') {
+        this.checkNode(child, lambdaEnv);
+      }
     }
   }
 
@@ -695,7 +749,7 @@ export class TypeChecker {
     const argNodes = getCallArguments(node, funcNode);
 
     // Don't report "undefined" for method calls on objects — member checking handles that
-    if (funcNode.type === 'member_expression' || funcNode.type === 'safe_member_expression') {
+    if (funcNode.type === 'member_expression' || funcNode.type === 'safe_member_expression' || funcNode.type === 'qualified_identifier') {
       this.checkNode(funcNode, env);
       // Check arguments recursively
       for (const arg of argNodes) this.checkNode(arg, env);
