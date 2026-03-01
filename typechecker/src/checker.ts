@@ -37,6 +37,23 @@ import { inferType, SyntaxNodeRef } from './infer';
 // Re-export SyntaxNodeRef so consumers only need to import from checker
 export { SyntaxNodeRef };
 
+/** Identifiers that are keywords or built-in names — never flag as undefined. */
+const SKIP_IDENTIFIERS = new Set([
+  'true', 'false', 'null', 'this', 'self', 'it', 'result', 'else',
+  'return', 'break', 'continue', 'throw',
+  'invariant', 'ensure', 'prefer', 'avoid', 'assume', 'hint',
+  'fun', 'val', 'var', 'if', 'when', 'for', 'while', 'do',
+  'import', 'module', 'from', 'as',
+  'data', 'entity', 'sealed', 'class', 'object', 'interface',
+  'agent', 'intent', 'fuzzy', 'evolve', 'feature', 'context', 'resource',
+  'can', 'cannot', 'tools', 'boundaries', 'factors',
+  'is', 'in', 'to', 'per', 'not', 'and', 'or',
+  'try', 'catch', 'finally',
+  'delegate', 'spawn', 'recall', 'ask', 'diagnose', 'emit',
+  'adapt', 'fallback',
+  'output', // implicit name in intent functions
+]);
+
 // ---------------------------------------------------------------------------
 // TypeChecker
 // ---------------------------------------------------------------------------
@@ -436,6 +453,15 @@ export class TypeChecker {
         this.checkMemberExpression(node, env);
         break;
 
+      case 'safe_member_expression':
+        this.checkMemberExpression(node, env);
+        break;
+
+      case 'qualified_identifier':
+        // Qualified identifiers (e.g., Shape.Circle) — check only the first segment
+        this.checkQualifiedIdentifier(node, env);
+        break;
+
       case 'identifier':
         this.checkIdentifier(node, env);
         break;
@@ -588,8 +614,8 @@ export class TypeChecker {
 
   private checkIdentifier(node: SyntaxNodeRef, env: TypeEnvironment): void {
     const name = node.text;
-    // Skip keywords and built-in values that aren't in the environment
-    if (['true', 'false', 'null', 'this', 'self', 'it', 'result', 'else'].includes(name)) {
+    // Skip keywords, built-in values, and special names
+    if (SKIP_IDENTIFIERS.has(name)) {
       return;
     }
     const type = env.lookup(name);
@@ -598,6 +624,66 @@ export class TypeChecker {
       if (!resolved) {
         this.report('error', `Undefined variable '${name}'`, node);
       }
+    }
+  }
+
+  private checkQualifiedIdentifier(node: SyntaxNodeRef, env: TypeEnvironment): void {
+    // For qualified identifiers like Shape.Circle, only check the root segment
+    const parts = node.text.split('.');
+    if (parts.length > 0) {
+      const root = parts[0];
+      if (!SKIP_IDENTIFIERS.has(root) && !env.lookup(root) && !env.resolveType(root)) {
+        this.report('error', `Undefined variable '${root}'`, node);
+      }
+    }
+  }
+
+  private checkEntityBody(node: SyntaxNodeRef, env: TypeEnvironment): void {
+    // Entity declarations have an optional body with invariant clauses.
+    // Invariant blocks reference entity fields, so we create a scope with fields bound.
+    const bodyNode = node.childForFieldName('body');
+    if (!bodyNode) return;
+
+    const entityEnv = env.child();
+    // Bind entity fields into scope
+    for (const child of node.namedChildren) {
+      if (child.type === 'field_parameter') {
+        const fieldNameNode = child.childForFieldName('name');
+        if (fieldNameNode) {
+          const fieldType = this.resolveTypeAnnotation(child, env);
+          entityEnv.define(fieldNameNode.text, fieldType.tag !== 'unknown' ? fieldType : mkAnyType());
+        }
+      }
+    }
+
+    // Check invariant blocks
+    for (const child of bodyNode.namedChildren) {
+      if (child.type === 'invariant_clause') {
+        for (const inner of child.namedChildren) {
+          this.checkNode(inner, entityEnv);
+        }
+      }
+    }
+  }
+
+  private checkStringTemplate(node: SyntaxNodeRef, env: TypeEnvironment): void {
+    // Walk only template_substitution and simple_substitution children,
+    // not string_content or escape_sequence nodes.
+    for (const child of node.namedChildren) {
+      if (child.type === 'template_substitution') {
+        // ${expression} — check the expression inside
+        for (const inner of child.namedChildren) {
+          this.checkNode(inner, env);
+        }
+      } else if (child.type === 'simple_substitution') {
+        // $identifier — check that the identifier exists
+        for (const inner of child.namedChildren) {
+          if (inner.type === 'identifier') {
+            this.checkIdentifier(inner, env);
+          }
+        }
+      }
+      // Skip string_content and escape_sequence
     }
   }
 
@@ -621,6 +707,12 @@ export class TypeChecker {
     // For identifier calls, also validate the name exists
     if (funcNode.type === 'identifier') {
       const name = funcNode.text;
+      // Skip keyword-like names that may appear as call targets
+      if (SKIP_IDENTIFIERS.has(name)) {
+        // Still check arg nodes
+        for (const arg of argNodes) this.checkNode(arg, env);
+        return;
+      }
       if (!env.lookup(name) && !env.resolveType(name)) {
         this.report('error', `Undefined function '${name}'`, funcNode);
         // Still check arg nodes for errors
@@ -642,8 +734,8 @@ export class TypeChecker {
           `Function '${funcNode.text}' expects at least ${requiredCount} argument(s) but got ${argCount}`,
           node,
         );
-      } else if (argCount > maxCount && maxCount > 0) {
-        // Only warn if we know the max (hasDefault params could accept extras via varargs)
+      } else if (argCount > maxCount && maxCount > 0 && requiredCount > 0) {
+        // Only warn if we have required params — all-default params suggest variadic behavior
         this.report(
           'warning',
           `Function '${funcNode.text}' expects at most ${maxCount} argument(s) but got ${argCount}`,

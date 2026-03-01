@@ -9,11 +9,13 @@ Thumbs.db
 *.swo
 *~
 
-# Build artifacts (future)
+# Build artifacts
 /build/
 /dist/
 /out/
 /target/
+lsp/dist/
+editors/vscode/dist/
 
 # Node
 node_modules/

@@ -1,7 +1,7 @@
 {
   "name": "anima-mcp-server",
-  "version": "0.2.0",
-  "description": "MCP server for Anima language validation",
+  "version": "0.3.0",
+  "description": "MCP server for Anima language validation, execution, and scaffolding",
   "main": "src/index.ts",
   "scripts": {
     "start": "ts-node src/index.ts",
