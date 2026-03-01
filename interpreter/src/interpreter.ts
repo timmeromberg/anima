@@ -1810,6 +1810,11 @@ export class Interpreter {
 
     const callee = this.evalNode(funcNode, env);
 
+    // Safe call propagation: if callee is null from a ?. chain, return null
+    if (callee.kind === 'null' && funcNode.type === 'safe_member_expression') {
+      return mkNull();
+    }
+
     // Collect arguments: skip the function node, gather the rest
     const args: AnimaValue[] = [];
     const namedArgs = new Map<string, AnimaValue>();
@@ -1967,8 +1972,8 @@ export class Interpreter {
         case 'size': return mkInt(obj.elements.length);
         case 'length': return mkInt(obj.elements.length);
         case 'isEmpty': return mkBuiltinMethod(() => mkBool(obj.elements.length === 0));
-        case 'first': return obj.elements.length > 0 ? obj.elements[0] : mkNull();
-        case 'last': return obj.elements.length > 0 ? obj.elements[obj.elements.length - 1] : mkNull();
+        case 'first': return mkBuiltinMethod(() => obj.elements.length > 0 ? obj.elements[0] : mkNull());
+        case 'last': return mkBuiltinMethod(() => obj.elements.length > 0 ? obj.elements[obj.elements.length - 1] : mkNull());
         case 'add': return mkBuiltinMethod((args) => {
           if (!obj.mutable) throw new AnimaRuntimeError('Cannot modify immutable list');
           obj.elements.push(args[0]);
