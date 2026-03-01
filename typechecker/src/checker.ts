@@ -128,6 +128,64 @@ export class TypeChecker {
       [{ name: 'condition', type: mkBoolType(), hasDefault: false }],
       mkUnitType(),
     ));
+    this.env.define('setOf', mkFunctionType(
+      [{ name: 'elements', type: mkAnyType(), hasDefault: true }],
+      mkListType(mkAnyType()),
+    ));
+    this.env.define('now', mkFunctionType([], mkIntType()));
+
+    // Memory builtins
+    this.env.define('remember', mkFunctionType(
+      [{ name: 'key', type: mkStringType(), hasDefault: false },
+       { name: 'value', type: mkAnyType(), hasDefault: false }],
+      mkUnitType(),
+    ));
+    this.env.define('recall', mkFunctionType(
+      [{ name: 'query', type: mkStringType(), hasDefault: false }],
+      mkListType(mkAnyType()),
+    ));
+    this.env.define('forget', mkFunctionType(
+      [{ name: 'key', type: mkStringType(), hasDefault: false }],
+      mkBoolType(),
+    ));
+
+    // Evolution builtins
+    this.env.define('pin', mkFunctionType(
+      [{ name: 'name', type: mkStringType(), hasDefault: false }],
+      mkUnitType(),
+    ));
+    this.env.define('unpin', mkFunctionType(
+      [{ name: 'name', type: mkStringType(), hasDefault: false }],
+      mkUnitType(),
+    ));
+    this.env.define('trackFitness', mkFunctionType(
+      [{ name: 'name', type: mkStringType(), hasDefault: false },
+       { name: 'score', type: mkFloatType(), hasDefault: false }],
+      mkUnitType(),
+    ));
+    this.env.define('getFitness', mkFunctionType(
+      [{ name: 'name', type: mkStringType(), hasDefault: false }],
+      mkFloatType(),
+    ));
+    this.env.define('evolveInfo', mkFunctionType(
+      [{ name: 'name', type: mkStringType(), hasDefault: false }],
+      mkAnyType(),
+    ));
+
+    // NL builtins
+    this.env.define('NL', mkFunctionType(
+      [{ name: 'text', type: mkStringType(), hasDefault: false }],
+      mkStringType(),
+    ));
+    this.env.define('semanticEquals', mkFunctionType(
+      [{ name: 'a', type: mkStringType(), hasDefault: false },
+       { name: 'b', type: mkStringType(), hasDefault: false }],
+      mkBoolType(),
+    ));
+    this.env.define('extractEntities', mkFunctionType(
+      [{ name: 'text', type: mkStringType(), hasDefault: false }],
+      mkListType(mkStringType()),
+    ));
 
     // Register well-known type names
     this.env.defineTypeAlias('Int', mkIntType());
