@@ -1,0 +1,20 @@
+{
+  "name": "anima-linter",
+  "version": "0.1.0",
+  "description": "Linter for the Anima programming language",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-anima": "file:../tree-sitter-anima"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
