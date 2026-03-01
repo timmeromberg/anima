@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tree-sitter:
+    name: Tree-sitter Parser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tree-sitter-anima/package-lock.json
+
+      - name: Install dependencies
+        working-directory: tree-sitter-anima
+        run: npm ci
+
+      - name: Generate parser
+        working-directory: tree-sitter-anima
+        run: npx tree-sitter generate
+
+      - name: Run corpus tests
+        working-directory: tree-sitter-anima
+        run: npx tree-sitter test
+
+      - name: Parse all example files
+        working-directory: tree-sitter-anima
+        run: |
+          errors=0
+          for f in ../examples/*.anima; do
+            if ! npx tree-sitter parse "$f" > /dev/null 2>&1; then
+              echo "FAIL: $f"
+              npx tree-sitter parse "$f" || true
+              errors=$((errors + 1))
+            else
+              echo "OK: $f"
+            fi
+          done
+          exit $errors
+
+  interpreter:
+    name: Interpreter Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: interpreter/package-lock.json
+
+      - name: Install tree-sitter-anima
+        working-directory: tree-sitter-anima
+        run: |
+          npm ci
+          npx tree-sitter generate
+          npx node-gyp configure && npx node-gyp build
+
+      - name: Install interpreter dependencies
+        working-directory: interpreter
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: interpreter
+        run: npx tsc --noEmit
