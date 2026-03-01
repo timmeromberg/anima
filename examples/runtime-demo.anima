@@ -22,7 +22,7 @@ sealed class Shape {
 
 // --- Extension function ---
 
-fun String.shout(): String = this + "!"
+fun String.shout(): String = this.uppercase() + "!"
 
 // --- Intent function ---
 
