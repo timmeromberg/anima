@@ -32,7 +32,7 @@ export type AnimaValue =
   | { kind: 'entity'; typeName: string; fields: Map<string, AnimaValue>; fieldOrder: string[] }
   | { kind: 'entity_type'; typeName: string; fieldDefs: EntityFieldDef[]; invariants: SyntaxNodeRef[]; closure: Environment }
   | { kind: 'confident'; value: AnimaValue; confidence: number }
-  | { kind: 'agent'; typeName: string; context: Environment; methods: Map<string, AnimaValue> }
+  | { kind: 'agent'; typeName: string; context: Environment; methods: Map<string, AnimaValue>; eventHandlers: Map<string, AnimaValue>; boundaries: AgentBoundaries }
   | { kind: 'agent_type'; typeName: string; declaration: SyntaxNodeRef; closure: Environment }
   | { kind: 'unit' };
 
@@ -45,6 +45,13 @@ export interface EntityFieldDef {
 export interface ParamDef {
   name: string;
   defaultValue?: SyntaxNodeRef;
+}
+
+export interface AgentBoundaries {
+  maxToolCalls?: number;
+  toolCallCount: number;
+  canActions: string[];
+  cannotActions: string[];
 }
 
 export type BuiltinFn = (args: AnimaValue[], namedArgs?: Map<string, AnimaValue>) => AnimaValue;
@@ -109,8 +116,14 @@ export function mkEntityType(
   return { kind: 'entity_type', typeName, fieldDefs, invariants, closure };
 }
 
-export function mkAgent(typeName: string, context: Environment, methods: Map<string, AnimaValue>): AnimaValue {
-  return { kind: 'agent', typeName, context, methods };
+export function mkAgent(
+  typeName: string,
+  context: Environment,
+  methods: Map<string, AnimaValue>,
+  eventHandlers: Map<string, AnimaValue> = new Map(),
+  boundaries: AgentBoundaries = { toolCallCount: 0, canActions: [], cannotActions: [] },
+): AnimaValue {
+  return { kind: 'agent', typeName, context, methods, eventHandlers, boundaries };
 }
 
 export function mkAgentType(typeName: string, declaration: SyntaxNodeRef, closure: Environment): AnimaValue {

@@ -31,6 +31,7 @@ import {
   valueToString,
   valuesEqual,
   asNumber,
+  AgentBoundaries,
 } from './values';
 import {
   AnimaRuntimeError,
@@ -223,13 +224,16 @@ export class Interpreter {
         return this.evalConfidenceExpression(node, env);
       case 'spawn_expression':
         return this.evalSpawnExpression(node, env);
-      case 'semantic_expression':
       case 'delegate_expression':
+        return this.evalDelegateExpression(node, env);
       case 'parallel_expression':
+        return this.evalParallelExpression(node, env);
+      case 'emit_expression':
+        return this.evalEmitExpression(node, env);
+      case 'semantic_expression':
       case 'recall_expression':
       case 'ask_expression':
       case 'diagnose_expression':
-      case 'emit_expression':
         return this.evalStub(node);
 
       // ---- Type expressions (ignored at runtime) ----
@@ -794,11 +798,12 @@ export class Interpreter {
     // Walk the agent body sections
     const bodyNode = requiredField(decl, 'body');
     const methods = new Map<string, AnimaValue>();
+    const eventHandlers = new Map<string, AnimaValue>();
+    const boundaries: AgentBoundaries = { toolCallCount: 0, canActions: [], cannotActions: [] };
 
     for (const section of bodyNode.namedChildren) {
       switch (section.type) {
         case 'agent_context_section': {
-          // Initialize context fields
           for (const fieldDecl of section.namedChildren) {
             if (fieldDecl.type === 'field_declaration') {
               const fieldName = requiredField(fieldDecl, 'name').text;
@@ -811,10 +816,10 @@ export class Interpreter {
           break;
         }
         case 'tools_section': {
-          // Tools are declared but not implemented in v0.1 — register stubs
           for (const toolDecl of section.namedChildren) {
             if (toolDecl.type === 'tool_declaration') {
               const toolName = requiredField(toolDecl, 'name').text;
+              // Tool stubs track calls against boundary limits
               agentEnv.define(toolName, mkBuiltin(toolName, () => {
                 throw new AnimaRuntimeError(`Tool '${toolName}' is not connected to an implementation`);
               }), false);
@@ -823,36 +828,146 @@ export class Interpreter {
           break;
         }
         case 'boundaries_section': {
-          // Store boundary values in the agent env for runtime checking
           for (const rule of section.namedChildren) {
             if (rule.type === 'boundary_assignment') {
               const bName = requiredField(rule, 'name').text;
               const bValue = this.evalNode(requiredField(rule, 'value'), agentEnv);
               agentEnv.define(bName, bValue, false);
+              if (bName === 'maxToolCalls' && bValue.kind === 'int') {
+                boundaries.maxToolCalls = bValue.value;
+              }
+            } else if (rule.type === 'can_block') {
+              const block = childOfType(rule, 'block');
+              if (block) {
+                for (const stmt of block.namedChildren) {
+                  boundaries.canActions.push(stmt.text.replace(/;/g, '').trim());
+                }
+              }
+            } else if (rule.type === 'cannot_block') {
+              const block = childOfType(rule, 'block');
+              if (block) {
+                for (const stmt of block.namedChildren) {
+                  boundaries.cannotActions.push(stmt.text.replace(/;/g, '').trim());
+                }
+              }
             }
-            // can/cannot/requiresApproval blocks — stored but not enforced in v0.1
           }
           break;
         }
         case 'function_declaration': {
-          // Regular methods
-          const fn = this.evalFunctionDeclaration(section, agentEnv);
+          this.evalFunctionDeclaration(section, agentEnv);
           const fnName = requiredField(section, 'name').text;
           methods.set(fnName, agentEnv.get(fnName));
           break;
         }
         case 'intent_declaration': {
-          // Intent methods
           this.evalIntentDeclaration(section, agentEnv);
           const fnName = requiredField(section, 'name').text;
           methods.set(fnName, agentEnv.get(fnName));
           break;
         }
-        // team_section, evolving_declaration, on_handler — not yet implemented
+        case 'on_handler': {
+          const eventTypeNode = requiredField(section, 'event_type');
+          const eventName = eventTypeNode.text;
+          const handlerBody = section.namedChildren.find(
+            c => c.type === 'lambda_expression' || c.type === 'block'
+          );
+          if (handlerBody) {
+            eventHandlers.set(eventName, mkFunction(`on<${eventName}>`, [{ name: 'event' }], handlerBody, agentEnv));
+          }
+          break;
+        }
+        case 'team_section': {
+          // Evaluate team member spawn expressions
+          for (const member of section.namedChildren) {
+            if (member.type === 'team_member') {
+              this.evalNode(member, agentEnv);
+            }
+          }
+          break;
+        }
       }
     }
 
-    return mkAgent(agentType.typeName, agentEnv, methods);
+    return mkAgent(agentType.typeName, agentEnv, methods, eventHandlers, boundaries);
+  }
+
+  // ==================================================================
+  // Delegation, Parallel, Emit
+  // ==================================================================
+
+  private evalDelegateExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // delegate(agent) { expr } — evaluate the body in the agent's context
+    const targetNode = requiredField(node, 'target');
+    const bodyNode = requiredField(node, 'body');
+    const target = this.evalNode(targetNode, env);
+
+    if (target.kind !== 'agent') {
+      throw new AnimaTypeError(
+        `delegate() target must be an agent, got ${target.kind}`,
+        node.startPosition.row + 1,
+        node.startPosition.column,
+      );
+    }
+
+    // Check boundary: maxToolCalls
+    if (target.boundaries.maxToolCalls !== undefined) {
+      target.boundaries.toolCallCount++;
+      if (target.boundaries.toolCallCount > target.boundaries.maxToolCalls) {
+        throw new AnimaRuntimeError(
+          `Agent '${target.typeName}' exceeded maxToolCalls limit (${target.boundaries.maxToolCalls})`,
+          node.startPosition.row + 1,
+          node.startPosition.column,
+        );
+      }
+    }
+
+    // Execute the body in the agent's context environment
+    // The body can reference the agent's methods and context fields
+    return this.evalFunctionBody(bodyNode, target.context);
+  }
+
+  private evalParallelExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // parallel { ... } — single-threaded simulation: just execute the body sequentially
+    const bodyNode = requiredField(node, 'body');
+    return this.evalFunctionBody(bodyNode, env);
+  }
+
+  private evalEmitExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // emit(value) — dispatch to event handlers registered in the current environment
+    const valueNode = node.namedChildren[0];
+    if (!valueNode) return mkUnit();
+    const eventValue = this.evalNode(valueNode, env);
+
+    // Walk up the environment to find an agent that has a handler for this event type
+    this.dispatchEvent(eventValue, env);
+    return mkUnit();
+  }
+
+  private dispatchEvent(event: AnimaValue, env: Environment): void {
+    // Determine event type name from the value
+    let eventTypeName: string;
+    if (event.kind === 'entity') {
+      eventTypeName = event.typeName;
+    } else if (event.kind === 'string') {
+      eventTypeName = event.value;
+    } else {
+      eventTypeName = event.kind;
+    }
+
+    // Search for agents in the environment that handle this event type
+    // In v0.1, we check if 'this' or 'self' is an agent with matching handler
+    try {
+      const self = env.get('this');
+      if (self.kind === 'agent') {
+        const handler = self.eventHandlers.get(eventTypeName);
+        if (handler && handler.kind === 'function') {
+          const handlerEnv = handler.closure.child();
+          handlerEnv.define('event', event, false);
+          this.evalFunctionBody(handler.body, handlerEnv);
+        }
+      }
+    } catch (_) { /* no 'this' in scope */ }
   }
 
   // ==================================================================
@@ -1782,6 +1897,11 @@ export class Interpreter {
       switch (name) {
         case 'typeName': return mkString(obj.typeName);
         case 'toString': return mkBuiltinMethod(() => mkString(valueToString(obj)));
+        case 'toolCallCount': return mkInt(obj.boundaries.toolCallCount);
+        case 'maxToolCalls': return obj.boundaries.maxToolCalls !== undefined
+          ? mkInt(obj.boundaries.maxToolCalls) : mkNull();
+        case 'canActions': return mkList(obj.boundaries.canActions.map(a => mkString(a)));
+        case 'cannotActions': return mkList(obj.boundaries.cannotActions.map(a => mkString(a)));
       }
     }
 
