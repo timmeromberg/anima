@@ -215,4 +215,20 @@ export function registerBuiltins(env: Environment): void {
     const msg = args.length > 0 ? valueToString(args[0]) : 'error';
     throw new AnimaRuntimeError(msg);
   }), false);
+
+  // ---- Time ----
+
+  env.define('now', mkBuiltin('now', (): AnimaValue => {
+    return mkInt(Date.now());
+  }), false);
+
+  // ---- Collection helpers ----
+
+  env.define('emptyList', mkBuiltin('emptyList', (): AnimaValue => {
+    return mkList([]);
+  }), false);
+
+  env.define('emptyMap', mkBuiltin('emptyMap', (): AnimaValue => {
+    return mkMap(new Map());
+  }), false);
 }

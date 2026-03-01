@@ -215,10 +215,12 @@ export class Interpreter {
         return this.evalAgentDeclaration(node, env);
       case 'evolving_declaration':
         return this.evalEvolvingDeclaration(node, env);
-      case 'feature_declaration':
       case 'context_declaration':
-      case 'resource_declaration':
+        return this.evalContextDeclaration(node, env);
       case 'protocol_declaration':
+        return this.evalProtocolDeclaration(node, env);
+      case 'feature_declaration':
+      case 'resource_declaration':
       case 'diagnosable_declaration':
         return this.evalStub(node);
 
@@ -995,6 +997,68 @@ export class Interpreter {
   // ==================================================================
   // Evolving declarations
   // ==================================================================
+
+  private evalContextDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+
+    // A context declaration creates a map of tier → fields
+    const contextEntries = new Map<string, AnimaValue>();
+
+    for (const child of node.namedChildren) {
+      if (child.type === 'context_tier') {
+        // First child text is the tier name (persistent, session, ephemeral)
+        const tierName = child.children[0]?.text ?? 'unknown';
+        const tierFields = new Map<string, AnimaValue>();
+
+        for (const field of child.namedChildren) {
+          if (field.type === 'field_declaration') {
+            const fieldName = requiredField(field, 'name').text;
+            const valueNode = field.childForFieldName('value');
+            const val = valueNode ? this.evalNode(valueNode, env) : mkNull();
+            tierFields.set(fieldName, val);
+          }
+        }
+
+        contextEntries.set(tierName, mkMap(tierFields));
+      }
+    }
+
+    const contextValue = mkMap(contextEntries);
+    env.defineOrUpdate(name, contextValue, false);
+    return mkUnit();
+  }
+
+  private evalProtocolDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+
+    // A protocol registers each message as an entity type constructor
+    const nsEntries = new Map<string, AnimaValue>();
+
+    for (const child of node.namedChildren) {
+      if (child.type === 'message_declaration') {
+        const msgName = requiredField(child, 'name').text;
+
+        const fieldDefs: EntityFieldDef[] = [];
+        for (const fc of child.namedChildren) {
+          if (fc.type === 'field_parameter') {
+            const fieldName = requiredField(fc, 'name').text;
+            const isVar = fc.children.some(c => c.text === 'var');
+            fieldDefs.push({ name: fieldName, mutable: isVar });
+          }
+        }
+
+        const msgType = mkEntityType(msgName, fieldDefs, [], env);
+        env.defineOrUpdate(msgName, msgType, false);
+        nsEntries.set(msgName, msgType);
+      }
+    }
+
+    // Register the protocol name as a namespace
+    env.defineOrUpdate(name, mkMap(nsEntries), false);
+    return mkUnit();
+  }
 
   private evalEvolvingDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
     // evolve { ... } — register the construct for evolution tracking
