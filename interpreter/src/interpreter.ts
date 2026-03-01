@@ -21,6 +21,9 @@ import {
   mkFunction,
   mkEntity,
   mkEntityType,
+  mkConfident,
+  getConfidence,
+  unwrapConfident,
   isTruthy,
   valueToString,
   valuesEqual,
@@ -210,8 +213,9 @@ export class Interpreter {
         return this.evalStub(node);
 
       // ---- AI-first expression stubs ----
-      case 'semantic_expression':
       case 'confidence_expression_val':
+        return this.evalConfidenceExpression(node, env);
+      case 'semantic_expression':
       case 'delegate_expression':
       case 'parallel_expression':
       case 'spawn_expression':
@@ -764,6 +768,35 @@ export class Interpreter {
     return mkBool(node.text === 'true');
   }
 
+  private evalConfidenceExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const valueNode = requiredField(node, 'value');
+    const confNode = requiredField(node, 'confidence');
+    const value = this.evalNode(valueNode, env);
+    const confidence = this.parseConfidenceValue(confNode);
+    return mkConfident(value, confidence);
+  }
+
+  /** Parse a confidence_expression node into a numeric confidence value */
+  private parseConfidenceValue(node: SyntaxNodeRef): number {
+    // confidence_expression contains: float_literal | 'Confidence' | '_' | (>float) | (<float) | (float..float)
+    // Find the float_literal child
+    const floatChild = node.namedChildren.find(c => c.type === 'float_literal');
+    if (floatChild) {
+      return parseFloat(floatChild.text);
+    }
+    // Direct float_literal (node itself might be the float)
+    if (node.type === 'float_literal') {
+      return parseFloat(node.text);
+    }
+    // Check text for keywords
+    const text = node.text.trim();
+    if (text === 'Confidence' || text === '_') {
+      return 1.0; // Runtime-determined or wildcard
+    }
+    // Fallback for complex expressions
+    return 1.0;
+  }
+
   private evalBinaryExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
     const leftNode = requiredField(node, 'left');
     const rightNode = requiredField(node, 'right');
@@ -772,41 +805,89 @@ export class Interpreter {
     const opNode = node.childForFieldName('operator');
     const op = opNode ? opNode.text : this.findOperator(node);
 
-    // Short-circuit for logical operators
+    // Short-circuit for logical operators with confidence propagation
     if (op === '&&') {
       const left = this.evalNode(leftNode, env);
-      if (!isTruthy(left)) return mkBool(false);
-      return mkBool(isTruthy(this.evalNode(rightNode, env)));
+      const cL = getConfidence(left);
+      if (!isTruthy(left)) return this.wrapIfConfident(mkBool(false), cL);
+      const right = this.evalNode(rightNode, env);
+      const cR = getConfidence(right);
+      return this.wrapIfConfident(mkBool(isTruthy(right)), Math.min(cL, cR));
     }
     if (op === '||') {
       const left = this.evalNode(leftNode, env);
-      if (isTruthy(left)) return mkBool(true);
-      return mkBool(isTruthy(this.evalNode(rightNode, env)));
+      const cL = getConfidence(left);
+      if (isTruthy(left)) return this.wrapIfConfident(mkBool(true), cL);
+      const right = this.evalNode(rightNode, env);
+      const cR = getConfidence(right);
+      return this.wrapIfConfident(mkBool(isTruthy(right)), Math.max(cL, cR));
     }
 
     const left = this.evalNode(leftNode, env);
     const right = this.evalNode(rightNode, env);
+    const cL = getConfidence(left);
+    const cR = getConfidence(right);
+    // Unwrap for computation
+    const uL = unwrapConfident(left);
+    const uR = unwrapConfident(right);
+
+    let result: AnimaValue;
+    let resultConf: number;
 
     switch (op) {
-      // Arithmetic
-      case '+': return this.evalAdd(left, right, node);
-      case '-': return this.evalArith(left, right, (a, b) => a - b, node);
-      case '*': return this.evalArith(left, right, (a, b) => a * b, node);
-      case '/': return this.evalDiv(left, right, node);
-      case '%': return this.evalArith(left, right, (a, b) => a % b, node);
+      // Arithmetic — product rule
+      case '+':
+        result = this.evalAdd(uL, uR, node);
+        resultConf = cL * cR;
+        break;
+      case '-':
+        result = this.evalArith(uL, uR, (a, b) => a - b, node);
+        resultConf = cL * cR;
+        break;
+      case '*':
+        result = this.evalArith(uL, uR, (a, b) => a * b, node);
+        resultConf = cL * cR;
+        break;
+      case '/':
+        result = this.evalDiv(uL, uR, node);
+        resultConf = cL * cR;
+        break;
+      case '%':
+        result = this.evalArith(uL, uR, (a, b) => a % b, node);
+        resultConf = cL * cR;
+        break;
 
-      // Comparison
-      case '<': return mkBool(this.compareValues(left, right) < 0);
-      case '>': return mkBool(this.compareValues(left, right) > 0);
-      case '<=': return mkBool(this.compareValues(left, right) <= 0);
-      case '>=': return mkBool(this.compareValues(left, right) >= 0);
+      // Comparison — product rule
+      case '<':
+        result = mkBool(this.compareValues(uL, uR) < 0);
+        resultConf = cL * cR;
+        break;
+      case '>':
+        result = mkBool(this.compareValues(uL, uR) > 0);
+        resultConf = cL * cR;
+        break;
+      case '<=':
+        result = mkBool(this.compareValues(uL, uR) <= 0);
+        resultConf = cL * cR;
+        break;
+      case '>=':
+        result = mkBool(this.compareValues(uL, uR) >= 0);
+        resultConf = cL * cR;
+        break;
 
-      // Equality
-      case '==': return mkBool(valuesEqual(left, right));
-      case '!=': return mkBool(!valuesEqual(left, right));
+      // Equality — product rule
+      case '==':
+        result = mkBool(valuesEqual(uL, uR));
+        resultConf = cL * cR;
+        break;
+      case '!=':
+        result = mkBool(!valuesEqual(uL, uR));
+        resultConf = cL * cR;
+        break;
 
       // The 'to' operator creates a pair (2-element list)
-      case 'to': return mkList([left, right]);
+      case 'to':
+        return mkList([left, right]);
 
       default:
         throw new AnimaRuntimeError(
@@ -815,6 +896,14 @@ export class Interpreter {
           node.startPosition.column,
         );
     }
+
+    return this.wrapIfConfident(result, resultConf);
+  }
+
+  /** Wrap a value with confidence only if conf < 1.0 */
+  private wrapIfConfident(value: AnimaValue, conf: number): AnimaValue {
+    if (conf >= 1.0) return value;
+    return mkConfident(value, conf);
   }
 
   /**
@@ -900,14 +989,17 @@ export class Interpreter {
     const operandNode = requiredField(node, 'operand');
     const op = opNode ? opNode.text : '';
     const operand = this.evalNode(operandNode, env);
+    const conf = getConfidence(operand);
+    const u = unwrapConfident(operand);
 
     switch (op) {
       case '-':
-        if (operand.kind === 'int') return mkInt(-operand.value);
-        if (operand.kind === 'float') return mkFloat(-operand.value);
-        throw new AnimaTypeError(`Cannot negate ${operand.kind}`);
+        if (u.kind === 'int') return this.wrapIfConfident(mkInt(-u.value), conf);
+        if (u.kind === 'float') return this.wrapIfConfident(mkFloat(-u.value), conf);
+        throw new AnimaTypeError(`Cannot negate ${u.kind}`);
       case '!':
-        return mkBool(!isTruthy(operand));
+        // Negation preserves confidence
+        return this.wrapIfConfident(mkBool(!isTruthy(u)), conf);
       default:
         throw new AnimaRuntimeError(`Unknown unary operator: '${op}'`);
     }
@@ -1072,6 +1164,19 @@ export class Interpreter {
   }
 
   private accessMember(obj: AnimaValue, name: string, node: SyntaxNodeRef): AnimaValue {
+    // Confident value members
+    if (obj.kind === 'confident') {
+      switch (name) {
+        case 'confidence': return mkFloat(obj.confidence);
+        case 'value': return obj.value;
+        case 'unwrap': return mkBuiltinMethod(() => obj.value);
+        case 'decompose': return mkBuiltinMethod(() => mkList([obj.value, mkFloat(obj.confidence)]));
+      }
+      // For other members, delegate to inner value and propagate confidence
+      const innerResult = this.accessMember(obj.value, name, node);
+      return this.wrapIfConfident(innerResult, obj.confidence);
+    }
+
     // List members
     if (obj.kind === 'list') {
       switch (name) {

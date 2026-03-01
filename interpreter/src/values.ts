@@ -31,6 +31,7 @@ export type AnimaValue =
   | { kind: 'builtin'; name: string; fn: BuiltinFn }
   | { kind: 'entity'; typeName: string; fields: Map<string, AnimaValue>; fieldOrder: string[] }
   | { kind: 'entity_type'; typeName: string; fieldDefs: EntityFieldDef[]; invariants: SyntaxNodeRef[]; closure: Environment }
+  | { kind: 'confident'; value: AnimaValue; confidence: number }
   | { kind: 'unit' };
 
 export interface EntityFieldDef {
@@ -106,6 +107,32 @@ export function mkEntityType(
   return { kind: 'entity_type', typeName, fieldDefs, invariants, closure };
 }
 
+export function mkConfident(value: AnimaValue, confidence: number): AnimaValue {
+  // Clamp to [0, 1] and round to avoid floating point noise
+  const c = Math.round(Math.max(0, Math.min(1, confidence)) * 1e10) / 1e10;
+  // If confidence is 1.0, just return the unwrapped value (optimization)
+  if (c === 1.0) return value;
+  // Don't double-wrap: if value is already confident, re-wrap the inner value
+  if (value.kind === 'confident') {
+    return { kind: 'confident', value: value.value, confidence: c };
+  }
+  return { kind: 'confident', value, confidence: c };
+}
+
+/**
+ * Get the confidence of any value. Non-confident values have implicit confidence 1.0.
+ */
+export function getConfidence(v: AnimaValue): number {
+  return v.kind === 'confident' ? v.confidence : 1.0;
+}
+
+/**
+ * Get the unwrapped value (strips confidence wrapper if present).
+ */
+export function unwrapConfident(v: AnimaValue): AnimaValue {
+  return v.kind === 'confident' ? v.value : v;
+}
+
 // ---- Value utilities ----
 
 export function isTruthy(v: AnimaValue): boolean {
@@ -120,6 +147,7 @@ export function isTruthy(v: AnimaValue): boolean {
     case 'map': return v.entries.size > 0;
     case 'entity': return true;
     case 'entity_type': return true;
+    case 'confident': return isTruthy(v.value);
     default: return true;
   }
 }
@@ -153,10 +181,16 @@ export function valueToString(v: AnimaValue): string {
       return `${v.typeName}(${fields.join(', ')})`;
     }
     case 'entity_type': return `<entity_type ${v.typeName}>`;
+    case 'confident': return `${valueToString(v.value)} @ ${v.confidence}`;
   }
 }
 
 export function valuesEqual(a: AnimaValue, b: AnimaValue): boolean {
+  // Unwrap confidence for equality comparison
+  const ua = unwrapConfident(a);
+  const ub = unwrapConfident(b);
+  if (ua !== a || ub !== b) return valuesEqual(ua, ub);
+
   if (a.kind !== b.kind) {
     // Allow int/float comparison
     if ((a.kind === 'int' || a.kind === 'float') && (b.kind === 'int' || b.kind === 'float')) {
@@ -206,6 +240,7 @@ export function valuesEqual(a: AnimaValue, b: AnimaValue): boolean {
  * Get the numeric value from an int or float, or throw.
  */
 export function asNumber(v: AnimaValue): number {
-  if (v.kind === 'int' || v.kind === 'float') return v.value;
-  throw new Error(`Expected number, got ${v.kind}`);
+  const u = unwrapConfident(v);
+  if (u.kind === 'int' || u.kind === 'float') return u.value;
+  throw new Error(`Expected number, got ${u.kind}`);
 }

@@ -677,4 +677,93 @@ describe('Interpreter integration', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  conditionalTest('confidence annotation and accessors', () => {
+    const output = runProgram(`
+      val prediction = "cat" @ 0.92
+      println(prediction.value)
+      println(prediction.confidence)
+    `);
+    expect(output).toBe('cat\n0.92\n');
+  });
+
+  conditionalTest('confidence unwrap and decompose', () => {
+    const output = runProgram(`
+      val prediction = "cat" @ 0.92
+      val raw = prediction.unwrap()
+      println(raw)
+      val parts = prediction.decompose()
+      println(parts[0])
+      println(parts[1])
+    `);
+    expect(output).toBe('cat\ncat\n0.92\n');
+  });
+
+  conditionalTest('confidence arithmetic propagation (product rule)', () => {
+    const output = runProgram(`
+      val x = 10 @ 0.9
+      val y = 20 @ 0.8
+      val sum = x + y
+      println(sum.value)
+      println(sum.confidence)
+    `);
+    expect(output).toBe('30\n0.72\n');
+  });
+
+  conditionalTest('confidence with certain operand', () => {
+    const output = runProgram(`
+      val x = 10 @ 0.9
+      val doubled = x * 2
+      println(doubled.value)
+      println(doubled.confidence)
+    `);
+    expect(output).toBe('20\n0.9\n');
+  });
+
+  conditionalTest('confidence logical operators', () => {
+    const output = runProgram(`
+      val a = true @ 0.95
+      val b = true @ 0.80
+      val both = a && b
+      println(both.confidence)
+      val either = a || b
+      println(either.confidence)
+      val notA = !a
+      println(notA.confidence)
+    `);
+    // AND: min(0.95, 0.80) = 0.80
+    // OR: max(0.95, 0.80) = 0.95
+    // NOT: preserves 0.95
+    expect(output).toBe('0.8\n0.95\n0.95\n');
+  });
+
+  conditionalTest('confidence member access propagation', () => {
+    const output = runProgram(`
+      data entity Point(val x: Int, val y: Int)
+      val p = Point(1, 2) @ 0.85
+      println(p.x.value)
+      println(p.x.confidence)
+    `);
+    // Accessing field of a confident entity propagates confidence
+    expect(output).toBe('1\n0.85\n');
+  });
+
+  conditionalTest('confidence comparison propagation', () => {
+    const output = runProgram(`
+      val temp = 100.0 @ 0.9
+      val threshold = 50.0
+      val isHot = temp > threshold
+      println(isHot.value)
+      println(isHot.confidence)
+    `);
+    expect(output).toBe('true\n0.9\n');
+  });
+
+  conditionalTest('confidence toString', () => {
+    const output = runProgram(`
+      val x = "hello" @ 0.75
+      println(x)
+    `);
+    expect(output).toBe('hello @ 0.75\n');
+  });
 });
