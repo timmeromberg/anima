@@ -220,7 +220,9 @@ export class Interpreter {
       case 'protocol_declaration':
         return this.evalProtocolDeclaration(node, env);
       case 'feature_declaration':
+        return this.evalFeatureDeclaration(node, env);
       case 'resource_declaration':
+        return this.evalResourceDeclaration(node, env);
       case 'diagnosable_declaration':
         return this.evalStub(node);
 
@@ -1057,6 +1059,52 @@ export class Interpreter {
 
     // Register the protocol name as a namespace
     env.defineOrUpdate(name, mkMap(nsEntries), false);
+    return mkUnit();
+  }
+
+  private evalFeatureDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const featureName = nameNode.text.replace(/^"|"$/g, '');
+
+    // Execute each spec (BDD given/whenever/then blocks)
+    for (const child of node.namedChildren) {
+      if (child.type === 'spec_declaration') {
+        const specName = requiredField(child, 'name').text.replace(/^"|"$/g, '');
+        const specEnv = env.child();
+
+        for (const block of child.namedChildren) {
+          if (block.type === 'given_block' || block.type === 'whenever_block' || block.type === 'then_block') {
+            const body = block.namedChildren[0]; // the block node
+            if (body) {
+              // Execute block contents directly in specEnv (shared scope)
+              for (const stmt of body.namedChildren) {
+                this.evalNode(stmt, specEnv);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return mkUnit();
+  }
+
+  private evalResourceDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+
+    // Register resource as an entity type with its field parameters
+    const fieldDefs: EntityFieldDef[] = [];
+    for (const child of node.namedChildren) {
+      if (child.type === 'field_parameter') {
+        const fieldName = requiredField(child, 'name').text;
+        const isVar = child.children.some(c => c.text === 'var');
+        fieldDefs.push({ name: fieldName, mutable: isVar });
+      }
+    }
+
+    const resourceType = mkEntityType(name, fieldDefs, [], env);
+    env.defineOrUpdate(name, resourceType, false);
     return mkUnit();
   }
 
