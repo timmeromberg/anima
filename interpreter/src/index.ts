@@ -4,6 +4,7 @@
  *
  * Usage: npx ts-node src/index.ts <file.anima>
  *        npx ts-node src/index.ts --eval "<code>"
+ *        npx ts-node src/index.ts check <file.anima> [...]
  */
 
 import * as fs from 'fs';
@@ -32,6 +33,17 @@ function main(): void {
     console.error('');
     console.error('You need a C compiler (gcc/clang) and node-gyp installed.');
     process.exit(1);
+  }
+
+  // Handle `check` command
+  if (args[0] === 'check') {
+    const files = args.slice(1);
+    if (files.length === 0) {
+      console.error('Error: check requires at least one file argument');
+      process.exit(1);
+    }
+    const exitCode = runCheck(files);
+    process.exit(exitCode);
   }
 
   let source: string;
@@ -77,6 +89,42 @@ function main(): void {
   }
 }
 
+/**
+ * Run parse-only validation on one or more files.
+ * Returns 0 if all files are clean, 1 if any have errors.
+ */
+function runCheck(files: string[]): number {
+  let hasAnyErrors = false;
+
+  for (const filepath of files) {
+    const resolved = path.resolve(filepath);
+    if (!fs.existsSync(resolved)) {
+      console.error(`Error: File not found: ${resolved}`);
+      hasAnyErrors = true;
+      continue;
+    }
+
+    const source = fs.readFileSync(resolved, 'utf-8');
+    const result = parse(source);
+
+    // Use the original filepath for display (not the resolved absolute path)
+    const displayName = filepath;
+
+    if (result.hasErrors) {
+      hasAnyErrors = true;
+      const count = result.errors.length;
+      console.log(`\u2717 ${displayName} \u2014 ${count} error${count === 1 ? '' : 's'}`);
+      for (const err of result.errors) {
+        console.log(`  Line ${err.line}, Col ${err.column}: ${err.message}`);
+      }
+    } else {
+      console.log(`\u2713 ${displayName} \u2014 no errors`);
+    }
+  }
+
+  return hasAnyErrors ? 1 : 0;
+}
+
 function readFile(filepath: string): string {
   const resolved = path.resolve(filepath);
   if (!fs.existsSync(resolved)) {
@@ -90,10 +138,11 @@ function printUsage(): void {
   console.log('Anima Interpreter v0.1.0');
   console.log('');
   console.log('Usage:');
-  console.log('  npx ts-node src/index.ts <file.anima>       Run an Anima file');
-  console.log('  npx ts-node src/index.ts run <file.anima>   Run an Anima file');
-  console.log('  npx ts-node src/index.ts --eval "<code>"    Evaluate inline code');
-  console.log('  npx ts-node src/index.ts --help             Show this help');
+  console.log('  npx ts-node src/index.ts <file.anima>            Run an Anima file');
+  console.log('  npx ts-node src/index.ts run <file.anima>        Run an Anima file');
+  console.log('  npx ts-node src/index.ts check <file.anima> ...  Check files for parse errors');
+  console.log('  npx ts-node src/index.ts --eval "<code>"         Evaluate inline code');
+  console.log('  npx ts-node src/index.ts --help                  Show this help');
 }
 
 main();
