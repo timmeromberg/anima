@@ -178,6 +178,14 @@ export class Interpreter {
       case 'entity_declaration':
         return this.evalEntityDeclaration(node, env);
 
+      // ---- Sealed classes and interfaces ----
+      case 'sealed_declaration':
+        return this.evalSealedDeclaration(node, env);
+      case 'interface_declaration':
+        return this.evalInterfaceDeclaration(node, env);
+      case 'type_alias':
+        return mkUnit(); // Type aliases are only relevant for type checking
+
       // ---- AI-first constructs (stubs) ----
       case 'intent_declaration':
       case 'evolving_declaration':
@@ -188,9 +196,6 @@ export class Interpreter {
       case 'resource_declaration':
       case 'protocol_declaration':
       case 'diagnosable_declaration':
-      case 'sealed_declaration':
-      case 'interface_declaration':
-      case 'type_alias':
         return this.evalStub(node);
 
       // ---- AI-first expression stubs ----
@@ -325,6 +330,47 @@ export class Interpreter {
     // Register entity type as a callable constructor
     const entityType = mkEntityType(name, fieldDefs, invariants, env);
     env.defineOrUpdate(name, entityType, false);
+    return mkUnit();
+  }
+
+  private evalSealedDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const sealedName = nameNode.text;
+
+    // Register each sealed variant as an entity type constructor
+    for (const child of node.namedChildren) {
+      if (child.type === 'sealed_member') {
+        const dataClass = childOfType(child, 'sealed_data_class');
+        if (dataClass) {
+          const variantName = requiredField(dataClass, 'name').text;
+
+          // Extract field definitions
+          const fieldDefs: EntityFieldDef[] = [];
+          for (const fc of dataClass.namedChildren) {
+            if (fc.type === 'field_parameter') {
+              const fieldName = requiredField(fc, 'name').text;
+              const isVar = fc.children.some(c => c.text === 'var');
+              fieldDefs.push({ name: fieldName, mutable: isVar });
+            }
+          }
+
+          // Register variant as entity type with sealed parent info
+          const variantType = mkEntityType(variantName, fieldDefs, [], env);
+          // Store the sealed parent name for `is` type checking
+          if (variantType.kind === 'entity_type') {
+            (variantType as any).sealedParent = sealedName;
+          }
+          env.defineOrUpdate(variantName, variantType, false);
+        }
+      }
+    }
+
+    return mkUnit();
+  }
+
+  private evalInterfaceDeclaration(_node: SyntaxNodeRef, _env: Environment): AnimaValue {
+    // Interfaces are type-only constructs; no runtime behavior needed yet.
+    // They'll be relevant when we add the type checker (Phase 2).
     return mkUnit();
   }
 
@@ -1219,8 +1265,42 @@ export class Interpreter {
         // Check if it's an 'is' type check
         const isType = condNode.children.some(c => c.text === 'is');
         if (isType && subject) {
-          // Type checking -- for now, just check basic types
-          // Not fully implemented
+          // Find the type identifier in the condition
+          const typeNode = condNode.namedChildren.find(c =>
+            c.type === 'type_identifier' || c.type === 'primitive_type' || c.type === 'identifier'
+          );
+          if (typeNode) {
+            const typeName = typeNode.type === 'type_identifier'
+              ? typeNode.namedChildren[0]?.text ?? typeNode.text
+              : typeNode.text;
+
+            let matches = false;
+            switch (typeName) {
+              case 'Int': matches = subject.kind === 'int'; break;
+              case 'Float': matches = subject.kind === 'float'; break;
+              case 'String': matches = subject.kind === 'string'; break;
+              case 'Bool': case 'Boolean': matches = subject.kind === 'bool'; break;
+              case 'List': matches = subject.kind === 'list'; break;
+              case 'Map': matches = subject.kind === 'map'; break;
+              default:
+                if (subject.kind === 'entity') {
+                  matches = subject.typeName === typeName;
+                  if (!matches) {
+                    try {
+                      const et = env.get(subject.typeName);
+                      if (et.kind === 'entity_type' && (et as any).sealedParent === typeName) {
+                        matches = true;
+                      }
+                    } catch (_) { /* ignore */ }
+                  }
+                }
+                break;
+            }
+
+            if (matches) {
+              return this.evalBlockOrLambdaAsBlock(bodyNode, env);
+            }
+          }
           continue;
         }
         // Expression condition
@@ -1387,9 +1467,16 @@ export class Interpreter {
       case 'List': return mkBool(value.kind === 'list');
       case 'Map': return mkBool(value.kind === 'map');
       default:
-        // Check entity type name
+        // Check entity type name or sealed parent
         if (value.kind === 'entity') {
-          return mkBool(value.typeName === typeName);
+          if (value.typeName === typeName) return mkBool(true);
+          // Check if the entity's type was declared as a sealed variant of typeName
+          try {
+            const entityType = env.get(value.typeName);
+            if (entityType.kind === 'entity_type' && (entityType as any).sealedParent === typeName) {
+              return mkBool(true);
+            }
+          } catch (_) { /* ignore */ }
         }
         return mkBool(false);
     }
