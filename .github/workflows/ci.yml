@@ -73,3 +73,7 @@ jobs:
       - name: Typecheck
         working-directory: interpreter
         run: npx tsc --noEmit
+
+      - name: Run tests
+        working-directory: interpreter
+        run: npx jest
