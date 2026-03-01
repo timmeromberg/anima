@@ -1293,12 +1293,10 @@ export class Interpreter {
     if (iterable.kind === 'list') {
       elements = iterable.elements;
     } else if (iterable.kind === 'map') {
-      // Convert map entries to entities with key/value fields
+      // Convert map entries to MapEntry entities
       elements = [];
       for (const [k, v] of iterable.entries) {
-        elements.push(mkEntity('MapEntry',
-          new Map<string, AnimaValue>([['key', mkString(k)], ['value', v]]),
-          ['key', 'value']));
+        elements.push(this.mkMapEntry(k, v));
       }
     } else {
       throw new AnimaTypeError(
@@ -2889,10 +2887,17 @@ export class Interpreter {
     return hasFloat ? mkFloat(sum) : mkInt(sum);
   }
 
+  private mkMapEntry(key: string, value: AnimaValue): AnimaValue {
+    return mkEntity('MapEntry',
+      new Map<string, AnimaValue>([['key', mkString(key)], ['value', value]]),
+      ['key', 'value']);
+  }
+
   private mapFilter(map: Extract<AnimaValue, { kind: 'map' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
     const result = new Map<string, AnimaValue>();
     for (const [key, value] of map.entries) {
-      const keep = this.callFunction(fn, [mkString(key), value], new Map(), node, this.globalEnv);
+      const entry = this.mkMapEntry(key, value);
+      const keep = this.callFunction(fn, [entry], new Map(), node, this.globalEnv);
       if (isTruthy(keep)) {
         result.set(key, value);
       }
@@ -2903,9 +2908,10 @@ export class Interpreter {
   private mapMapValues(map: Extract<AnimaValue, { kind: 'map' }>, fn: AnimaValue, node: SyntaxNodeRef): AnimaValue {
     const result = new Map<string, AnimaValue>();
     for (const [key, value] of map.entries) {
+      const entry = this.mkMapEntry(key, value);
       result.set(
         key,
-        this.callFunction(fn, [mkString(key), value], new Map(), node, this.globalEnv),
+        this.callFunction(fn, [entry], new Map(), node, this.globalEnv),
       );
     }
     return mkMap(result);
