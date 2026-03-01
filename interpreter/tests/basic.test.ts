@@ -1076,4 +1076,122 @@ describe('Interpreter integration', () => {
     `);
     expect(output).toBe('42\n');
   });
+
+  // ---- Memory system ----
+
+  it('remember and recall', () => {
+    if (!treeSitterAvailable) return;
+    // Register memory builtins manually for the test
+    const { MemoryStore, setMemoryStore, registerMemoryBuiltins } = require('../src/memory');
+    setMemoryStore(new MemoryStore());
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+    const interp = new Interpreter();
+    registerMemoryBuiltins(interp.getGlobalEnv());
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const tree = parse(`
+        remember("user_name", "Alice")
+        remember("user_age", 30)
+        val results = recall("user")
+        println(results.size)
+      `);
+      interp.run(tree.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('2\n');
+  });
+
+  it('forget removes memory entry', () => {
+    if (!treeSitterAvailable) return;
+    const { MemoryStore, setMemoryStore, registerMemoryBuiltins } = require('../src/memory');
+    setMemoryStore(new MemoryStore());
+    const { Interpreter } = require('../src/interpreter');
+    const { parse } = require('../src/parser');
+    const interp = new Interpreter();
+    registerMemoryBuiltins(interp.getGlobalEnv());
+
+    let output = '';
+    const orig = process.stdout.write;
+    process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+    try {
+      const tree = parse(`
+        remember("data", "hello")
+        forget("data")
+        val results = recall("data")
+        println(results.size)
+      `);
+      interp.run(tree.rootNode);
+    } finally {
+      process.stdout.write = orig;
+    }
+    expect(output).toBe('0\n');
+  });
+
+  // ---- LLM adapter ----
+
+  it('mock LLM adapter similarity', () => {
+    const { MockLLMAdapter } = require('../src/llm');
+    const adapter = new MockLLMAdapter();
+    const result = adapter.similaritySync('hello world', 'hello world');
+    expect(result).toBe(1.0);
+  });
+
+  it('mock LLM adapter classify', () => {
+    const { MockLLMAdapter } = require('../src/llm');
+    const adapter = new MockLLMAdapter();
+    const result = adapter.classifySync('This is a happy message', ['happy', 'sad', 'neutral']);
+    expect(result.category).toBe('happy');
+  });
+
+  // ---- Evolution engine ----
+
+  it('evolution engine tracks fitness', () => {
+    const { EvolutionEngine } = require('../src/evolution');
+    const engine = new EvolutionEngine();
+    engine.register('myFunc', 'fun myFunc() {}');
+
+    const metrics = new Map([['accuracy', 0.8], ['speed', 0.6]]);
+    engine.recordFitness('myFunc', metrics);
+
+    expect(engine.getFitness('myFunc')).toBe(0.7);
+    const record = engine.getRecord('myFunc');
+    expect(record?.version).toBe(1);
+    expect(record?.fitnessHistory.length).toBe(1);
+  });
+
+  it('evolution engine pin prevents evolution', () => {
+    const { EvolutionEngine } = require('../src/evolution');
+    const engine = new EvolutionEngine();
+    engine.register('func', 'fun func() {}');
+    engine.pin('func');
+    const record = engine.getRecord('func');
+    expect(record?.active).toBe(false);
+  });
+
+  // ---- NL types ----
+
+  it('NL semantic equals with identical strings', () => {
+    const { nlSemanticEquals } = require('../src/nl');
+    // Identical strings should be semantically equal (Jaccard = 1.0 > 0.7)
+    expect(nlSemanticEquals('hello world', 'hello world')).toBe(true);
+  });
+
+  it('NL semantic equals with different strings', () => {
+    const { nlSemanticEquals } = require('../src/nl');
+    // Very different strings should not be semantically equal
+    expect(nlSemanticEquals('hello', 'goodbye forever')).toBe(false);
+  });
+
+  it('NL extract entities', () => {
+    const { nlExtractEntities } = require('../src/nl');
+    const entities = nlExtractEntities('The patient John visited Doctor Smith in New York');
+    expect(entities).toContain('John');
+    expect(entities).toContain('Doctor');
+    expect(entities).toContain('Smith');
+  });
 });

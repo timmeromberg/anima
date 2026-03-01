@@ -42,6 +42,8 @@ import {
 } from './errors';
 import { registerBuiltins } from './builtins';
 import { requiredField, childrenOfType, childOfType } from './ast';
+import { nlSemanticEquals, nlSemanticImplies } from './nl';
+import { getMemoryStore } from './memory';
 
 export class Interpreter {
   private globalEnv: Environment;
@@ -212,6 +214,7 @@ export class Interpreter {
       case 'agent_declaration':
         return this.evalAgentDeclaration(node, env);
       case 'evolving_declaration':
+        return this.evalEvolvingDeclaration(node, env);
       case 'feature_declaration':
       case 'context_declaration':
       case 'resource_declaration':
@@ -231,7 +234,9 @@ export class Interpreter {
       case 'emit_expression':
         return this.evalEmitExpression(node, env);
       case 'semantic_expression':
+        return this.evalSemanticExpression(node, env);
       case 'recall_expression':
+        return this.evalRecallExpression(node, env);
       case 'ask_expression':
       case 'diagnose_expression':
         return this.evalStub(node);
@@ -968,6 +973,75 @@ export class Interpreter {
         }
       }
     } catch (_) { /* no 'this' in scope */ }
+  }
+
+  // ==================================================================
+  // Evolving declarations
+  // ==================================================================
+
+  private evalEvolvingDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // evolve { ... } — register the construct for evolution tracking
+    const nameNode = node.childForFieldName('name');
+    const name = nameNode?.text ?? '<anonymous>';
+
+    // Register with evolution engine
+    const { getEvolutionEngine } = require('./evolution');
+    const engine = getEvolutionEngine();
+    engine.register(name, node.text);
+
+    // Evaluate the body normally (the evolving construct works like a normal declaration for now)
+    const bodyNode = node.childForFieldName('body');
+    if (bodyNode) {
+      return this.evalNode(bodyNode, env);
+    }
+    return mkUnit();
+  }
+
+  // ==================================================================
+  // Semantic expressions and recall
+  // ==================================================================
+
+  private evalSemanticExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // Semantic operators: ~= (equality), ~> (implication), <~ (containment)
+    const leftNode = node.childForFieldName('left') ?? node.namedChildren[0];
+    const rightNode = node.childForFieldName('right') ?? node.namedChildren[1];
+    if (!leftNode || !rightNode) return mkBool(false);
+
+    const left = this.evalNode(leftNode, env);
+    const right = this.evalNode(rightNode, env);
+
+    const leftStr = left.kind === 'string' ? left.value : valueToString(left);
+    const rightStr = right.kind === 'string' ? right.value : valueToString(right);
+
+    // Determine operator from node text
+    const nodeText = node.text;
+    if (nodeText.includes('~=')) {
+      return mkBool(nlSemanticEquals(leftStr, rightStr));
+    } else if (nodeText.includes('~>')) {
+      return mkBool(nlSemanticImplies(leftStr, rightStr));
+    } else if (nodeText.includes('<~')) {
+      return mkBool(nlSemanticImplies(rightStr, leftStr));
+    }
+
+    return mkBool(false);
+  }
+
+  private evalRecallExpression(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    // recall(query) — search memory store
+    const queryNode = node.namedChildren[0];
+    if (!queryNode) return mkList([]);
+
+    const query = this.evalNode(queryNode, env);
+    const queryStr = query.kind === 'string' ? query.value : valueToString(query);
+    const results = getMemoryStore().recall(queryStr);
+
+    return mkList(results.map(e => {
+      const entries = new Map<string, AnimaValue>();
+      entries.set('key', mkString(e.key));
+      entries.set('value', e.value);
+      entries.set('relevance', mkFloat(e.relevance));
+      return mkMap(entries);
+    }));
   }
 
   // ==================================================================
