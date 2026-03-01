@@ -1289,7 +1289,18 @@ export class Interpreter {
 
     const iterable = this.evalNode(iterableNode, env);
 
-    if (iterable.kind !== 'list') {
+    let elements: AnimaValue[];
+    if (iterable.kind === 'list') {
+      elements = iterable.elements;
+    } else if (iterable.kind === 'map') {
+      // Convert map entries to entities with key/value fields
+      elements = [];
+      for (const [k, v] of iterable.entries) {
+        elements.push(mkEntity('MapEntry',
+          new Map<string, AnimaValue>([['key', mkString(k)], ['value', v]]),
+          ['key', 'value']));
+      }
+    } else {
       throw new AnimaTypeError(
         `Cannot iterate over ${iterable.kind}`,
         iterableNode.startPosition.row + 1,
@@ -1297,7 +1308,7 @@ export class Interpreter {
       );
     }
 
-    for (const element of iterable.elements) {
+    for (const element of elements) {
       const loopEnv = env.child();
       loopEnv.define(varNode.text, element, false);
       try {
