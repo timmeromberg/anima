@@ -79,7 +79,7 @@ function main(): void {
   // Interpret
   const interpreter = new Interpreter();
   try {
-    interpreter.run(result.rootNode);
+    interpreter.run(result.rootNode, filename !== '<eval>' ? filename : undefined);
   } catch (e) {
     if (e instanceof AnimaError) {
       console.error(e.message);

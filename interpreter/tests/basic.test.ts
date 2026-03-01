@@ -635,4 +635,46 @@ describe('Interpreter integration', () => {
     `);
     expect(output).toBe('Hello, Alice\n');
   });
+
+  conditionalTest('import from another file', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const { parse } = require('../src/parser');
+    const { Interpreter } = require('../src/interpreter');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anima-test-'));
+    try {
+      // Write module file
+      fs.writeFileSync(path.join(tmpDir, 'math.anima'),
+        'fun add(a: Int, b: Int): Int = a + b\n');
+
+      // Write main file
+      const mainPath = path.join(tmpDir, 'main.anima');
+      const mainSource = `
+        import { add } from "./math"
+        fun main() {
+          println(add(3, 4))
+        }
+      `;
+      fs.writeFileSync(mainPath, mainSource);
+
+      // Capture stdout
+      let output = '';
+      const originalWrite = process.stdout.write;
+      process.stdout.write = ((str: string) => { output += str; return true; }) as any;
+
+      try {
+        const result = parse(mainSource);
+        const interpreter = new Interpreter();
+        interpreter.run(result.rootNode, mainPath);
+      } finally {
+        process.stdout.write = originalWrite;
+      }
+
+      expect(output).toBe('7\n');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

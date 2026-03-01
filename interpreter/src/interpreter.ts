@@ -40,6 +40,10 @@ export class Interpreter {
   private globalEnv: Environment;
   /** Extension functions keyed by "TypeName.methodName" */
   private extensionFunctions = new Map<string, AnimaValue>();
+  /** Directory of the currently executing file (for resolving imports) */
+  private currentDir: string | null = null;
+  /** Cache of already-imported module environments by resolved path */
+  private moduleCache = new Map<string, Environment>();
 
   constructor() {
     this.globalEnv = new Environment();
@@ -49,8 +53,13 @@ export class Interpreter {
   /**
    * Execute a full program from the root node of a parsed AST.
    * If a `main()` function is defined, it is called automatically.
+   * @param filePath Optional path to the source file (enables import resolution)
    */
-  run(rootNode: SyntaxNodeRef): AnimaValue {
+  run(rootNode: SyntaxNodeRef, filePath?: string): AnimaValue {
+    if (filePath) {
+      const path = require('path');
+      this.currentDir = path.dirname(path.resolve(filePath));
+    }
     const result = this.evalProgram(rootNode, this.globalEnv);
     // Auto-call main() if it exists
     try {
@@ -100,9 +109,9 @@ export class Interpreter {
       case 'var_declaration':
         return this.evalVarDeclaration(node, env);
       case 'module_declaration':
+        return mkUnit(); // Module namespacing is a type-system concern
       case 'import_declaration':
-        // Ignored for now -- modules/imports are not yet supported
-        return mkUnit();
+        return this.evalImportDeclaration(node, env);
       case 'line_comment':
       case 'block_comment':
         return mkUnit();
@@ -252,6 +261,96 @@ export class Interpreter {
     } else {
       env.defineOrUpdate(name, fn, false);
     }
+    return mkUnit();
+  }
+
+  private evalImportDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const path = require('path');
+    const fs = require('fs');
+
+    // Extract imported names (identifier children before 'from')
+    const names: string[] = [];
+    for (const child of node.namedChildren) {
+      if (child.type === 'identifier') names.push(child.text);
+    }
+
+    // Extract the source path from the string_literal child
+    const pathNode = node.namedChildren.find(c => c.type === 'string_literal');
+    if (!pathNode) {
+      throw new AnimaRuntimeError('import: missing source path');
+    }
+    // Strip quotes from string literal
+    const importPath = pathNode.text.slice(1, -1);
+
+    // Check for alias
+    const aliasNode = node.childForFieldName('alias');
+    const alias = aliasNode?.text;
+
+    // Resolve the file path
+    if (!this.currentDir) {
+      throw new AnimaRuntimeError('import: cannot resolve imports without a file path (use --eval with a file)');
+    }
+
+    let resolvedPath: string;
+    if (importPath.startsWith('./') || importPath.startsWith('../')) {
+      // Relative import
+      resolvedPath = path.resolve(this.currentDir, importPath);
+      if (!resolvedPath.endsWith('.anima')) resolvedPath += '.anima';
+    } else {
+      // Could be a standard library or package import — skip for now
+      return mkUnit();
+    }
+
+    if (!fs.existsSync(resolvedPath)) {
+      throw new AnimaRuntimeError(`import: file not found: ${resolvedPath}`);
+    }
+
+    // Check cache
+    let moduleEnv = this.moduleCache.get(resolvedPath);
+    if (!moduleEnv) {
+      // Parse and execute the imported file
+      const { parse: parseAnima } = require('./parser');
+      const source = fs.readFileSync(resolvedPath, 'utf-8');
+      const result = parseAnima(source);
+
+      if (result.hasErrors) {
+        throw new AnimaRuntimeError(`import: parse errors in ${resolvedPath}`);
+      }
+
+      // Execute in a fresh environment (with builtins)
+      moduleEnv = new Environment();
+      registerBuiltins(moduleEnv);
+
+      const savedDir = this.currentDir;
+      this.currentDir = path.dirname(resolvedPath);
+      this.evalProgram(result.rootNode, moduleEnv);
+      this.currentDir = savedDir;
+
+      this.moduleCache.set(resolvedPath, moduleEnv);
+    }
+
+    // Bind imported names into the current environment
+    if (alias) {
+      // import { ... } from "..." as Foo -> namespace all under alias
+      const nsMap = new Map<string, AnimaValue>();
+      for (const name of names) {
+        try {
+          nsMap.set(name, moduleEnv.get(name));
+        } catch {
+          throw new AnimaRuntimeError(`import: '${name}' not found in ${importPath}`);
+        }
+      }
+      env.define(alias, mkMap(nsMap, false), false);
+    } else {
+      for (const name of names) {
+        try {
+          env.define(name, moduleEnv.get(name), false);
+        } catch {
+          throw new AnimaRuntimeError(`import: '${name}' not found in ${importPath}`);
+        }
+      }
+    }
+
     return mkUnit();
   }
 
