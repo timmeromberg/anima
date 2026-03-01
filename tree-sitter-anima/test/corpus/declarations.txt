@@ -189,3 +189,27 @@ interface Rankable {
           type: (type_identifier
             (identifier))))
       return_type: (primitive_type))))
+
+================================================================================
+Nested function declaration
+================================================================================
+
+fun outer() { fun inner(x: Int): Int = x * 2 }
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list)
+    body: (block
+      (function_declaration
+        name: (identifier)
+        parameters: (parameter_list
+          (parameter
+            name: (identifier)
+            type: (primitive_type)))
+        return_type: (primitive_type)
+        body: (binary_expression
+          left: (identifier)
+          right: (int_literal))))))

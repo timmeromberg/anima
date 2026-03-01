@@ -26,3 +26,36 @@ fun test() { try { riskyCall() } catch (e: Error) { handleError(e) } }
                 (call_expression
                   function: (identifier)
                   (identifier))))))))))
+
+================================================================================
+Try/catch/finally
+================================================================================
+
+fun test() { try { risky() } catch (e: Error) { handle() } finally { cleanup() } }
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    parameters: (parameter_list)
+    body: (block
+      (expression_statement
+        (try_expression
+          body: (block
+            (expression_statement
+              (call_expression
+                function: (identifier))))
+          (catch_clause
+            name: (identifier)
+            type: (type_identifier
+              (identifier))
+            body: (block
+              (expression_statement
+                (call_expression
+                  function: (identifier)))))
+          (finally_clause
+            body: (block
+              (expression_statement
+                (call_expression
+                  function: (identifier))))))))))
