@@ -29,14 +29,22 @@ export type AnimaValue =
   | { kind: 'map'; entries: Map<string, AnimaValue>; mutable: boolean }
   | { kind: 'function'; name: string; params: ParamDef[]; body: SyntaxNodeRef; closure: Environment }
   | { kind: 'builtin'; name: string; fn: BuiltinFn }
+  | { kind: 'entity'; typeName: string; fields: Map<string, AnimaValue>; fieldOrder: string[] }
+  | { kind: 'entity_type'; typeName: string; fieldDefs: EntityFieldDef[]; invariants: SyntaxNodeRef[]; closure: Environment }
   | { kind: 'unit' };
+
+export interface EntityFieldDef {
+  name: string;
+  mutable: boolean;
+  defaultValue?: SyntaxNodeRef;
+}
 
 export interface ParamDef {
   name: string;
   defaultValue?: SyntaxNodeRef;
 }
 
-export type BuiltinFn = (args: AnimaValue[]) => AnimaValue;
+export type BuiltinFn = (args: AnimaValue[], namedArgs?: Map<string, AnimaValue>) => AnimaValue;
 
 // ---- Value constructors ----
 
@@ -85,6 +93,19 @@ export function mkBuiltin(name: string, fn: BuiltinFn): AnimaValue {
   return { kind: 'builtin', name, fn };
 }
 
+export function mkEntity(typeName: string, fields: Map<string, AnimaValue>, fieldOrder: string[]): AnimaValue {
+  return { kind: 'entity', typeName, fields, fieldOrder };
+}
+
+export function mkEntityType(
+  typeName: string,
+  fieldDefs: EntityFieldDef[],
+  invariants: SyntaxNodeRef[],
+  closure: Environment,
+): AnimaValue {
+  return { kind: 'entity_type', typeName, fieldDefs, invariants, closure };
+}
+
 // ---- Value utilities ----
 
 export function isTruthy(v: AnimaValue): boolean {
@@ -97,6 +118,8 @@ export function isTruthy(v: AnimaValue): boolean {
     case 'string': return v.value.length > 0;
     case 'list': return v.elements.length > 0;
     case 'map': return v.entries.size > 0;
+    case 'entity': return true;
+    case 'entity_type': return true;
     default: return true;
   }
 }
@@ -122,6 +145,14 @@ export function valueToString(v: AnimaValue): string {
     }
     case 'function': return `<function ${v.name}>`;
     case 'builtin': return `<builtin ${v.name}>`;
+    case 'entity': {
+      const fields: string[] = [];
+      for (const key of v.fieldOrder) {
+        fields.push(`${key}=${valueToString(v.fields.get(key)!)}`);
+      }
+      return `${v.typeName}(${fields.join(', ')})`;
+    }
+    case 'entity_type': return `<entity_type ${v.typeName}>`;
   }
 }
 
@@ -152,6 +183,16 @@ export function valuesEqual(a: AnimaValue, b: AnimaValue): boolean {
       if (a.entries.size !== bMap.entries.size) return false;
       for (const [k, v] of a.entries) {
         const bv = bMap.entries.get(k);
+        if (bv === undefined || !valuesEqual(v, bv)) return false;
+      }
+      return true;
+    }
+    case 'entity': {
+      const bEntity = b as Extract<AnimaValue, { kind: 'entity' }>;
+      if (a.typeName !== bEntity.typeName) return false;
+      if (a.fields.size !== bEntity.fields.size) return false;
+      for (const [k, v] of a.fields) {
+        const bv = bEntity.fields.get(k);
         if (bv === undefined || !valuesEqual(v, bv)) return false;
       }
       return true;

@@ -111,7 +111,7 @@ module.exports = grammar({
       field('parameters', $.parameter_list),
       optional(seq(':', field('return_type', $._type))),
       optional(field('context_clause', $.context_clause)),
-      field('body', choice($.block, seq('=', $._expression))),
+      choice(field('body', $.block), seq('=', field('body', $._expression))),
     ),
 
     modifier: _ => choice(

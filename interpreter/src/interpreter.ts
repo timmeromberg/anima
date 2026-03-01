@@ -9,6 +9,7 @@ import {
   AnimaValue,
   SyntaxNodeRef,
   ParamDef,
+  EntityFieldDef,
   mkInt,
   mkFloat,
   mkString,
@@ -17,6 +18,8 @@ import {
   mkUnit,
   mkList,
   mkFunction,
+  mkEntity,
+  mkEntityType,
   isTruthy,
   valueToString,
   valuesEqual,
@@ -25,6 +28,7 @@ import {
 import {
   AnimaRuntimeError,
   AnimaTypeError,
+  AnimaNameError,
   ReturnSignal,
   BreakSignal,
 } from './errors';
@@ -51,8 +55,12 @@ export class Interpreter {
       if (mainFn.kind === 'function' || mainFn.kind === 'builtin') {
         return this.callFunction(mainFn, [], new Map(), rootNode, this.globalEnv);
       }
-    } catch (_) {
-      // No main function — that's fine
+    } catch (e) {
+      if (e instanceof AnimaNameError) {
+        // No main function — that's fine
+      } else {
+        throw e;
+      }
     }
     return result;
   }
@@ -91,6 +99,9 @@ export class Interpreter {
       case 'module_declaration':
       case 'import_declaration':
         // Ignored for now -- modules/imports are not yet supported
+        return mkUnit();
+      case 'line_comment':
+      case 'block_comment':
         return mkUnit();
 
       // ---- Statements ----
@@ -162,6 +173,10 @@ export class Interpreter {
       case 'block':
         return this.evalBlock(node, env);
 
+      // ---- Entity declarations ----
+      case 'entity_declaration':
+        return this.evalEntityDeclaration(node, env);
+
       // ---- AI-first constructs (stubs) ----
       case 'intent_declaration':
       case 'evolving_declaration':
@@ -172,7 +187,6 @@ export class Interpreter {
       case 'resource_declaration':
       case 'protocol_declaration':
       case 'diagnosable_declaration':
-      case 'entity_declaration':
       case 'sealed_declaration':
       case 'interface_declaration':
       case 'type_alias':
@@ -235,20 +249,27 @@ export class Interpreter {
       if (patternNode.type === 'identifier') {
         env.define(patternNode.text, value, false);
       } else if (patternNode.type === 'destructuring_pattern') {
-        // Destructure a list into multiple val bindings
-        if (value.kind !== 'list') {
+        const identifiers = patternNode.namedChildren.filter(c => c.type === 'identifier');
+        if (value.kind === 'entity') {
+          // Destructure entity by field order
+          for (let i = 0; i < identifiers.length; i++) {
+            const fieldName = i < value.fieldOrder.length ? value.fieldOrder[i] : null;
+            const fieldVal = fieldName ? value.fields.get(fieldName) ?? mkNull() : mkNull();
+            env.define(identifiers[i].text, fieldVal, false);
+          }
+        } else if (value.kind === 'list') {
+          for (let i = 0; i < identifiers.length; i++) {
+            env.define(
+              identifiers[i].text,
+              i < value.elements.length ? value.elements[i] : mkNull(),
+              false,
+            );
+          }
+        } else {
           throw new AnimaTypeError(
-            'Destructuring requires a list value',
+            'Destructuring requires a list or entity value',
             patternNode.startPosition.row + 1,
             patternNode.startPosition.column,
-          );
-        }
-        const identifiers = patternNode.namedChildren.filter(c => c.type === 'identifier');
-        for (let i = 0; i < identifiers.length; i++) {
-          env.define(
-            identifiers[i].text,
-            i < value.elements.length ? value.elements[i] : mkNull(),
-            false,
           );
         }
       } else if (patternNode.type === 'wildcard_pattern') {
@@ -265,6 +286,44 @@ export class Interpreter {
     const valueNode = node.childForFieldName('value');
     const value = valueNode ? this.evalNode(valueNode, env) : mkNull();
     env.define(name, value, true);
+    return mkUnit();
+  }
+
+  private evalEntityDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+
+    // Extract field definitions from field_parameter children
+    const fieldDefs: EntityFieldDef[] = [];
+    for (const child of node.namedChildren) {
+      if (child.type === 'field_parameter') {
+        const fieldName = requiredField(child, 'name').text;
+        // Check if it's var (mutable) -- default is val (immutable)
+        const isVar = child.children.some(c => c.text === 'var');
+        const defaultNode = child.childForFieldName('default');
+        fieldDefs.push({
+          name: fieldName,
+          mutable: isVar,
+          defaultValue: defaultNode ?? undefined,
+        });
+      }
+    }
+
+    // Collect invariant blocks from entity_body
+    const invariants: SyntaxNodeRef[] = [];
+    const bodyNode = node.childForFieldName('body');
+    if (bodyNode) {
+      for (const child of bodyNode.namedChildren) {
+        if (child.type === 'invariant_clause') {
+          const block = childOfType(child, 'block');
+          if (block) invariants.push(block);
+        }
+      }
+    }
+
+    // Register entity type as a callable constructor
+    const entityType = mkEntityType(name, fieldDefs, invariants, env);
+    env.defineOrUpdate(name, entityType, false);
     return mkUnit();
   }
 
@@ -298,12 +357,27 @@ export class Interpreter {
         throw new AnimaTypeError('Cannot index into ' + obj.kind);
       }
     } else if (targetNode.type === 'member_expression') {
-      // Not yet supported -- entities and objects are not implemented
-      throw new AnimaRuntimeError(
-        'Member assignment is not yet supported',
-        targetNode.startPosition.row + 1,
-        targetNode.startPosition.column,
-      );
+      const objNode = requiredField(targetNode, 'object');
+      const memberNode = requiredField(targetNode, 'member');
+      const obj = this.evalNode(objNode, env);
+      const memberName = memberNode.text;
+
+      if (obj.kind === 'entity') {
+        if (!obj.fields.has(memberName)) {
+          throw new AnimaRuntimeError(
+            `No field '${memberName}' on ${obj.typeName}`,
+            targetNode.startPosition.row + 1,
+            targetNode.startPosition.column,
+          );
+        }
+        obj.fields.set(memberName, value);
+      } else {
+        throw new AnimaRuntimeError(
+          `Cannot assign to member of ${obj.kind}`,
+          targetNode.startPosition.row + 1,
+          targetNode.startPosition.column,
+        );
+      }
     } else {
       throw new AnimaRuntimeError(
         `Cannot assign to ${targetNode.type}`,
@@ -758,13 +832,12 @@ export class Interpreter {
     callSite: SyntaxNodeRef,
     callerEnv: Environment,
   ): AnimaValue {
+    if (callee.kind === 'entity_type') {
+      return this.constructEntity(callee, args, namedArgs, callSite, callerEnv);
+    }
+
     if (callee.kind === 'builtin') {
-      // Builtins just get positional args
-      const allArgs = [...args];
-      for (const [, v] of namedArgs) {
-        allArgs.push(v);
-      }
-      return callee.fn(allArgs);
+      return callee.fn(args, namedArgs);
     }
 
     if (callee.kind === 'function') {
@@ -932,6 +1005,37 @@ export class Interpreter {
         case 'toInt': return mkBuiltinMethod(() => mkInt(Math.trunc(obj.value)));
         case 'toString': return mkBuiltinMethod(() => mkString(valueToString(obj)));
       }
+    }
+
+    // Entity members
+    if (obj.kind === 'entity') {
+      // Field access
+      const fieldValue = obj.fields.get(name);
+      if (fieldValue !== undefined) {
+        return fieldValue;
+      }
+
+      switch (name) {
+        case 'toString': return mkBuiltinMethod(() => mkString(valueToString(obj)));
+        case 'copy': return mkBuiltinMethod((_args, namedArgs) => {
+          const newFields = new Map(obj.fields);
+          if (namedArgs) {
+            for (const [k, v] of namedArgs) {
+              if (!newFields.has(k)) {
+                throw new AnimaRuntimeError(`Unknown field '${k}' in ${obj.typeName}.copy()`);
+              }
+              newFields.set(k, v);
+            }
+          }
+          return mkEntity(obj.typeName, newFields, [...obj.fieldOrder]);
+        });
+      }
+
+      throw new AnimaRuntimeError(
+        `No member '${name}' on ${obj.typeName}`,
+        node.startPosition.row + 1,
+        node.startPosition.column,
+      );
     }
 
     throw new AnimaRuntimeError(
@@ -1178,8 +1282,73 @@ export class Interpreter {
       case 'Boolean': return mkBool(value.kind === 'bool');
       case 'List': return mkBool(value.kind === 'list');
       case 'Map': return mkBool(value.kind === 'map');
-      default: return mkBool(false);
+      default:
+        // Check entity type name
+        if (value.kind === 'entity') {
+          return mkBool(value.typeName === typeName);
+        }
+        return mkBool(false);
     }
+  }
+
+  // ==================================================================
+  // Entity construction
+  // ==================================================================
+
+  private constructEntity(
+    entityType: Extract<AnimaValue, { kind: 'entity_type' }>,
+    args: AnimaValue[],
+    namedArgs: Map<string, AnimaValue>,
+    callSite: SyntaxNodeRef,
+    callerEnv: Environment,
+  ): AnimaValue {
+    const fields = new Map<string, AnimaValue>();
+    const fieldOrder: string[] = [];
+
+    for (let i = 0; i < entityType.fieldDefs.length; i++) {
+      const def = entityType.fieldDefs[i];
+      fieldOrder.push(def.name);
+
+      const namedValue = namedArgs.get(def.name);
+      if (namedValue !== undefined) {
+        fields.set(def.name, namedValue);
+      } else if (i < args.length) {
+        fields.set(def.name, args[i]);
+      } else if (def.defaultValue) {
+        fields.set(def.name, this.evalNode(def.defaultValue, callerEnv));
+      } else {
+        throw new AnimaRuntimeError(
+          `Missing field '${def.name}' in ${entityType.typeName} constructor`,
+          callSite.startPosition.row + 1,
+          callSite.startPosition.column,
+        );
+      }
+    }
+
+    // Check invariants
+    if (entityType.invariants.length > 0) {
+      const invEnv = entityType.closure.child();
+      // Bind fields as variables so invariants can reference them
+      for (const [name, value] of fields) {
+        invEnv.define(name, value, false);
+      }
+      // Also bind 'this' for member-style access
+      const entity = mkEntity(entityType.typeName, fields, fieldOrder);
+      invEnv.defineOrUpdate('this', entity, false);
+
+      for (const invariant of entityType.invariants) {
+        const result = this.evalBlock(invariant, invEnv);
+        if (result.kind === 'bool' && !result.value) {
+          throw new AnimaRuntimeError(
+            `Invariant violation in ${entityType.typeName}`,
+            invariant.startPosition.row + 1,
+            invariant.startPosition.column,
+          );
+        }
+      }
+    }
+
+    return mkEntity(entityType.typeName, fields, fieldOrder);
   }
 
   // ==================================================================
@@ -1240,6 +1409,6 @@ export class Interpreter {
 }
 
 // Helper to create a builtin method value
-function mkBuiltinMethod(fn: (args: AnimaValue[]) => AnimaValue): AnimaValue {
+function mkBuiltinMethod(fn: (args: AnimaValue[], namedArgs?: Map<string, AnimaValue>) => AnimaValue): AnimaValue {
   return { kind: 'builtin', name: '<method>', fn };
 }
