@@ -766,4 +766,72 @@ describe('Interpreter integration', () => {
     `);
     expect(output).toBe('hello @ 0.75\n');
   });
+
+  conditionalTest('intent function with fallback', () => {
+    const output = runProgram(`
+      intent fun doubleIt(x: Int): Int {
+        ensure { output > 0 }
+        fallback {
+          x * 2
+        }
+      }
+
+      println(doubleIt(5))
+    `);
+    expect(output).toBe('10\n');
+  });
+
+  conditionalTest('intent function ensure violation', () => {
+    expect(() => runProgram(`
+      intent fun negative(x: Int): Int {
+        ensure { output < 0 }
+        fallback {
+          x * 2
+        }
+      }
+
+      negative(5)
+    `)).toThrow('ensure clause failed');
+  });
+
+  conditionalTest('fuzzy predicate with factors', () => {
+    const output = runProgram(`
+      fuzzy fun isLong(text: String): Boolean {
+        factors {
+          text.length > 5 weight 0.5
+          text.length > 10 weight 0.5
+        }
+      }
+
+      val short = isLong("hi")
+      println(short.value)
+      println(short.confidence)
+
+      val medium = isLong("hello world")
+      println(medium.value)
+      println(medium.confidence)
+    `);
+    // "hi": length=2, both factors false => confidence 0.0, result false
+    // "hello world": length=11, both true => confidence 1.0, result true
+    expect(output).toBe('false\n0.0\ntrue\n1.0\n');
+  });
+
+  conditionalTest('fuzzy predicate partial match', () => {
+    const output = runProgram(`
+      fuzzy fun isMedium(text: String): Boolean {
+        factors {
+          text.length > 3 weight 0.6
+          text.length > 20 weight 0.4
+        }
+      }
+
+      val result = isMedium("hello")
+      println(result.value)
+      println(result.confidence)
+    `);
+    // "hello": length=5, factor1 true (0.6), factor2 false (0.0)
+    // score = (1.0*0.6 + 0.0*0.4) / 1.0 = 0.6
+    // 0.6 >= 0.5 => true
+    expect(output).toBe('true\n0.6\n');
+  });
 });

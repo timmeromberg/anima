@@ -21,6 +21,7 @@ import {
   mkFunction,
   mkEntity,
   mkEntityType,
+  mkBuiltin,
   mkConfident,
   getConfidence,
   unwrapConfident,
@@ -200,10 +201,12 @@ export class Interpreter {
       case 'type_alias':
         return mkUnit(); // Type aliases are only relevant for type checking
 
-      // ---- AI-first constructs (stubs) ----
+      // ---- AI-first constructs ----
       case 'intent_declaration':
-      case 'evolving_declaration':
+        return this.evalIntentDeclaration(node, env);
       case 'fuzzy_declaration':
+        return this.evalFuzzyDeclaration(node, env);
+      case 'evolving_declaration':
       case 'agent_declaration':
       case 'feature_declaration':
       case 'context_declaration':
@@ -485,6 +488,209 @@ export class Interpreter {
     // Interfaces are type-only constructs; no runtime behavior needed yet.
     // They'll be relevant when we add the type checker (Phase 2).
     return mkUnit();
+  }
+
+  // ==================================================================
+  // Intent Functions
+  // ==================================================================
+
+  private evalIntentDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+    const paramsNode = requiredField(node, 'parameters');
+    const params = this.extractParams(paramsNode);
+    const bodyNode = requiredField(node, 'body'); // intent_body
+
+    // Parse the intent body to extract clauses
+    const clauses = this.parseIntentClauses(bodyNode);
+
+    // Create a builtin that executes the intent in fallback mode
+    const intentFn = mkBuiltin(name, (args: AnimaValue[]) => {
+      // Bind parameters
+      const intentEnv = env.child();
+      for (let i = 0; i < params.length; i++) {
+        const p = params[i];
+        const val = i < args.length ? args[i] : (p.defaultValue ? this.evalNode(p.defaultValue, intentEnv) : mkNull());
+        intentEnv.define(p.name, val, false);
+      }
+
+      // Execute fallback block if present, otherwise execute any statement clauses
+      let result: AnimaValue = mkNull();
+      if (clauses.fallback) {
+        try {
+          result = this.evalBlock(clauses.fallback, intentEnv);
+        } catch (e) {
+          if (e instanceof ReturnSignal) {
+            result = e.value as AnimaValue;
+          } else {
+            throw e;
+          }
+        }
+      } else if (clauses.statements.length > 0) {
+        for (const stmt of clauses.statements) {
+          try {
+            result = this.evalNode(stmt, intentEnv);
+          } catch (e) {
+            if (e instanceof ReturnSignal) {
+              result = e.value as AnimaValue;
+              break;
+            }
+            throw e;
+          }
+        }
+      }
+
+      // Bind 'output' for ensure/prefer/avoid post-condition checks
+      intentEnv.define('output', result, false);
+
+      // Check ensure clauses (hard post-conditions)
+      for (const ensureBlock of clauses.ensures) {
+        const check = this.evalBlock(ensureBlock, intentEnv);
+        if (!isTruthy(check)) {
+          throw new AnimaRuntimeError(
+            `Intent '${name}' ensure clause failed`,
+            ensureBlock.startPosition.row + 1,
+            ensureBlock.startPosition.column,
+          );
+        }
+      }
+
+      return result;
+    });
+
+    env.defineOrUpdate(name, intentFn, false);
+    return mkUnit();
+  }
+
+  private parseIntentClauses(bodyNode: SyntaxNodeRef): {
+    ensures: SyntaxNodeRef[];
+    prefers: { block: SyntaxNodeRef; weight: number }[];
+    avoids: { block: SyntaxNodeRef; weight: number }[];
+    fallback: SyntaxNodeRef | null;
+    statements: SyntaxNodeRef[];
+  } {
+    const ensures: SyntaxNodeRef[] = [];
+    const prefers: { block: SyntaxNodeRef; weight: number }[] = [];
+    const avoids: { block: SyntaxNodeRef; weight: number }[] = [];
+    let fallback: SyntaxNodeRef | null = null;
+    const statements: SyntaxNodeRef[] = [];
+
+    for (const child of bodyNode.namedChildren) {
+      switch (child.type) {
+        case 'ensure_clause': {
+          const block = child.namedChildren.find(c => c.type === 'block');
+          if (block) ensures.push(block);
+          break;
+        }
+        case 'prefer_clause': {
+          const block = child.namedChildren.find(c => c.type === 'block');
+          const weightNode = child.namedChildren.find(c => c.type === 'float_literal');
+          if (block) prefers.push({ block, weight: weightNode ? parseFloat(weightNode.text) : 1.0 });
+          break;
+        }
+        case 'avoid_clause': {
+          const block = child.namedChildren.find(c => c.type === 'block');
+          const weightNode = child.namedChildren.find(c => c.type === 'float_literal');
+          if (block) avoids.push({ block, weight: weightNode ? parseFloat(weightNode.text) : 1.0 });
+          break;
+        }
+        case 'fallback_clause': {
+          const block = child.namedChildren.find(c => c.type === 'block');
+          if (block) fallback = block;
+          break;
+        }
+        case 'assume_clause':
+        case 'hint_clause':
+        case 'cost_clause':
+        case 'adapt_clause':
+          // Advisory/metadata clauses — no runtime behavior in v0.1
+          break;
+        default:
+          // Regular statements inside intent body
+          statements.push(child);
+          break;
+      }
+    }
+
+    return { ensures, prefers, avoids, fallback, statements };
+  }
+
+  // ==================================================================
+  // Fuzzy Predicates
+  // ==================================================================
+
+  private evalFuzzyDeclaration(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    const nameNode = requiredField(node, 'name');
+    const name = nameNode.text;
+    const paramsNode = requiredField(node, 'parameters');
+    const params = this.extractParams(paramsNode);
+    const bodyNode = requiredField(node, 'body'); // fuzzy_body
+
+    // Create a builtin that evaluates the fuzzy predicate
+    const fuzzyFn = mkBuiltin(name, (args: AnimaValue[]) => {
+      // Bind parameters
+      const fuzzyEnv = env.child();
+      for (let i = 0; i < params.length; i++) {
+        const p = params[i];
+        const val = i < args.length ? args[i] : (p.defaultValue ? this.evalNode(p.defaultValue, fuzzyEnv) : mkNull());
+        fuzzyEnv.define(p.name, val, false);
+      }
+
+      // Find factors_block or metric_block
+      for (const child of bodyNode.namedChildren) {
+        if (child.type === 'factors_block') {
+          return this.evalFactorsBlock(child, fuzzyEnv);
+        }
+        if (child.type === 'metric_block') {
+          const block = child.namedChildren.find(c => c.type === 'block');
+          if (block) {
+            try {
+              return this.evalBlock(block, fuzzyEnv);
+            } catch (e) {
+              if (e instanceof ReturnSignal) return e.value as AnimaValue;
+              throw e;
+            }
+          }
+        }
+      }
+
+      return mkConfident(mkBool(false), 0);
+    });
+
+    env.defineOrUpdate(name, fuzzyFn, false);
+    return mkUnit();
+  }
+
+  private evalFactorsBlock(node: SyntaxNodeRef, env: Environment): AnimaValue {
+    let totalScore = 0;
+    let totalWeight = 0;
+
+    for (const factor of node.namedChildren) {
+      if (factor.type !== 'factor') continue;
+
+      const condNode = factor.childForFieldName('condition');
+      const weightNode = factor.childForFieldName('value');
+      if (!condNode || !weightNode) continue;
+
+      const weight = parseFloat(weightNode.text);
+      totalWeight += weight;
+
+      const condResult = this.evalNode(condNode, env);
+      // If the condition result is itself a confident bool, use its confidence as the score
+      if (condResult.kind === 'confident' && condResult.value.kind === 'bool') {
+        const score = condResult.value.value ? condResult.confidence : (1 - condResult.confidence);
+        totalScore += score * weight;
+      } else {
+        // Crisp evaluation: truthy = 1.0, falsy = 0.0
+        const score = isTruthy(condResult) ? 1.0 : 0.0;
+        totalScore += score * weight;
+      }
+    }
+
+    // Normalize if weights don't sum to 1
+    const confidence = totalWeight > 0 ? totalScore / totalWeight : 0;
+    const result = confidence >= 0.5;
+    return mkConfident(mkBool(result), confidence);
   }
 
   // ==================================================================

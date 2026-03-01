@@ -110,8 +110,6 @@ export function mkEntityType(
 export function mkConfident(value: AnimaValue, confidence: number): AnimaValue {
   // Clamp to [0, 1] and round to avoid floating point noise
   const c = Math.round(Math.max(0, Math.min(1, confidence)) * 1e10) / 1e10;
-  // If confidence is 1.0, just return the unwrapped value (optimization)
-  if (c === 1.0) return value;
   // Don't double-wrap: if value is already confident, re-wrap the inner value
   if (value.kind === 'confident') {
     return { kind: 'confident', value: value.value, confidence: c };
