@@ -58,11 +58,12 @@ jobs:
           cache: npm
           cache-dependency-path: interpreter/package-lock.json
 
-      - name: Install tree-sitter-anima
+      - name: Build tree-sitter-anima native module
         working-directory: tree-sitter-anima
         run: |
           npm ci
           npx tree-sitter generate
+          npx tree-sitter init --update
           npx node-gyp configure && npx node-gyp build
 
       - name: Install interpreter dependencies
